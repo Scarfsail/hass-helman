@@ -5,10 +5,11 @@ import { CARD_BUNDLE } from "./support/card-page";
  * What the flow arrows are allowed to cost while nobody is looking at them.
  *
  * The surges run forever, so their animations are paused whenever the element
- * is scrolled out of the viewport or the tab is in the background, and rejoin
- * the shared beat on the way back. Before that, three arrow rows kept the
- * renderer recalculating style and painting on every frame for as long as the
- * card was on the page -- offscreen and backgrounded included.
+ * is scrolled out of the viewport or the tab is in the background, and resume
+ * where they froze, at the rate they had, on the way back. Before that, three
+ * arrow rows kept the renderer recalculating style and painting on every frame
+ * for as long as the card was on the page -- offscreen and backgrounded
+ * included.
  *
  * The pause is a host attribute rather than reactive state, so it costs no
  * render; these read the animation's own `playState` rather than the attribute,
@@ -91,10 +92,10 @@ test("a beam is as thick as its power says, not a share of its column, and tiny 
             .map((item) => (item.querySelector(".animated-arrow") as HTMLElement | null)?.getBoundingClientRect().width ?? null);
     });
 
-    expect(widths).toEqual([7, 14, 2.5, null, null]);
+    expect(widths).toEqual([10.5, 21, 2.5, null, null]);
 });
 
-test("at half the maximum a consumer's beam is 7 px wide and keeps its source shares in order", async ({ page }) => {
+test("at half the maximum a consumer's beam is 10.5 px wide and keeps its source shares in order", async ({ page }) => {
     const consumer = {
         powerValue: MAX_POWER / 2,
         sourcePowerHistory: [{ "src-grid": { power: 100, color: "#000" }, "src-solar": { power: 300, color: "#000" } }],
@@ -103,7 +104,7 @@ test("at half the maximum a consumer's beam is 7 px wide and keeps its source sh
 
     const width = await page.evaluate(() =>
         document.querySelector("power-flow-arrows")!.shadowRoot!.querySelector(".animated-arrow")!.getBoundingClientRect().width);
-    expect(width).toBe(7);
+    expect(width).toBe(10.5);
     expect(await segments(page)).toEqual([[
         { source: "solar", grow: "0.75" },
         { source: "grid", grow: "0.25" },

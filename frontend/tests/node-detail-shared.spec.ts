@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import { CARD_BUNDLE, loadBundle } from "./support/card-page";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { onDashboard } from "./support/node-detail-harness";
+import { flowGlow } from "../cards/shared/flow-style";
 
 test.beforeEach(async ({ page }) => {
     await page.setContent("<div id='mount' style='width:320px'></div>");
@@ -83,7 +84,7 @@ test("a gauge pill too narrow for power and share drops the share and keeps the 
     expect(await clipped()).toBe(false);
 });
 
-test("an active gauge pill glows on the beat at its share's level, and holds it still under reduced motion", async ({ page }) => {
+test("an active gauge pill glows at its share's level and rate, and holds it still under reduced motion", async ({ page }) => {
     await page.evaluate(() => {
         const gauge = document.createElement("helman-flow-gauge") as any;
         gauge.of = "house";
@@ -92,16 +93,19 @@ test("an active gauge pill glows on the beat at its share's level, and holds it 
         document.getElementById("mount")!.append(gauge);
     });
     const glows = () => page.locator("helman-flow-gauge").evaluate((el) => Array.from(el.shadowRoot!.querySelectorAll("button")).map((button) => ({
-        tier: button.dataset.tier ?? null,
+        rate: button.dataset.rate ? Number(button.dataset.rate) : null,
         running: button.getAnimations({ subtree: true }).filter((animation) => animation.playState === "running").length,
-        startTimes: button.getAnimations({ subtree: true }).map((animation) => animation.startTime),
+        playbackRates: button.getAnimations({ subtree: true }).map((animation) => animation.playbackRate),
         shadow: getComputedStyle(button, "::after").boxShadow,
         opacity: getComputedStyle(button, "::after").opacity,
     })));
-    // Solar carries 8/9 of the gauge, tier 2; grid 1/9, tier 0; battery nothing.
-    await expect.poll(async () => (await glows()).map((glow) => [glow.tier, glow.running])).toEqual([["2", 1], [null, 0], ["0", 1]]);
+    // Solar carries 8/9 of the gauge, grid 1/9, battery nothing: each glow's rate is its own share's.
+    const solar = flowGlow(8 / 9).rate;
+    const grid = flowGlow(1 / 9).rate;
+    expect(solar).toBeGreaterThan(grid);
+    await expect.poll(async () => (await glows()).map((glow) => [glow.rate, glow.running])).toEqual([[solar, 1], [null, 0], [grid, 1]]);
+    await expect.poll(async () => (await glows()).map((glow) => glow.playbackRates)).toEqual([[solar], [], [grid]]);
     const live = await glows();
-    expect(live[0].startTimes).toEqual([0]);
     expect(live[1].shadow).toBe("none");
     await page.emulateMedia({ reducedMotion: "reduce" });
     await expect.poll(async () => (await glows()).map((glow) => glow.running)).toEqual([0, 0, 0]);

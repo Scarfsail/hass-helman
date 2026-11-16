@@ -1,5 +1,6 @@
 import { LitElement, PropertyValues, css, html, nothing, svg } from "lit-element";
-import { customElement } from "lit/decorators.js";
+import { customElement, state } from "lit/decorators.js";
+import { keyed } from "lit/directives/keyed.js";
 import type { HomeAssistant, LovelaceCard } from "../../types/ha";
 import { HelmanSimpleCardConfig } from "./HelmanSimpleCardConfig";
 import { TreeItem } from "../shared/data/tree-item";
@@ -13,53 +14,44 @@ import "./simple-card-battery";
 import "./simple-card-grid";
 import "./simple-card-house";
 import { helmanColorVars } from "../color-vars";
-import { FLOW_SURGE_LENGTH_CSS, alignToBeat, flowBeam, flowBeatStyles, flowGlow, flowHalo, flowHot, flowLandsAt, flowRatio, flowSurgeLength, flowSurgeStops, flowSurges, type FlowBeam } from "../shared/flow-style";
+import { FLOW_SURGE_LENGTH_CSS, flowBeam, flowBeatStyles, flowGlow, flowHalo, flowHot, flowRatio, flowSurgeLead, flowSurgeLength, flowSurgeStartCss, flowSurgeStops, flowSurges, syncFlowRates, type FlowBeam, type FlowBeamLengths } from "../shared/flow-style";
 import { dominantFlowColor, getFlowColor, type FlowSource } from "./flow-colors";
 import { IDLE_W, liveFlows } from "../node-detail/live-flows";
-
-/** Every flow on this card leaves its source on the beat's origin. */
-const LEAVES_AT = 0;
 
 /** One flow the card draws: its power against its source's maximum. */
 interface Edge {
     power: number;
     r: number;
     color: string;
-    /** The vertical connectors are short edges; the horizontals and diagonals are long. */
-    short: boolean;
 }
 
-/** One edge as drawn: whether it carries power, its beam and whether it is short. */
+/** One edge as drawn: whether it carries power, its ratio and its beam. */
 interface DrawnEdge {
     active: boolean;
+    r: number;
     beam: FlowBeam;
-    short: boolean;
 }
 
 /** The diagonal overlay's viewBox: the energy grid at its default size, px. */
 const OVERLAY_W = 200;
 const OVERLAY_H = 168;
 
-/** A node's halo, while it has a flow: its ratio, its colour and the beat it peaks on. */
+/** A node's halo, while it has a flow: its ratio and its colour. */
 interface Halo {
     r: number;
     color: string;
-    phase: number;
 }
 
 /**
- * A node's halo from its flows: it emits in its own colour as its surges
- * leave, or receives in `sourceColor` (its strongest flow's colour without
- * one) as its strongest flow's surges land; no flow, no halo.
+ * A node's halo from its flows: it emits in its own colour, or receives in
+ * `sourceColor` (its strongest flow's colour without one); no flow, no halo.
  */
 function nodeHalo(r: number, ownColor: string, outgoing: Edge[], incoming: Edge[], sourceColor?: string): Halo | null {
     if (outgoing.some((edge) => edge.power > 0)) {
-        return { r, color: ownColor, phase: LEAVES_AT };
+        return { r, color: ownColor };
     }
     const strongest = incoming.filter((edge) => edge.power > 0).sort((a, b) => b.power - a.power)[0];
-    return strongest
-        ? { r, color: sourceColor ?? strongest.color, phase: flowLandsAt(LEAVES_AT, strongest.r, strongest.short) }
-        : null;
+    return strongest ? { r, color: sourceColor ?? strongest.color } : null;
 }
 
 // ──────────────────────────────────── Card ────────────────────────────────────
@@ -161,7 +153,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         }
         .flow-bloom, .flow-beam, .flow-core {
             fill: none;
-            stroke-linecap: round;
+            stroke-linecap: butt;
         }
 
         /* The inverter sits where the flows cross: drawn over them, kept small. */
@@ -191,6 +183,10 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     // 3. Private properties & Host controller
     private readonly _flowId = `simple-flow-${Math.random().toString(36).slice(2)}`;
     private _config?: HelmanSimpleCardConfig;
+    /** Each beam's length on screen, px, as `syncFlowRates` measured it: what its surges are drawn from. */
+    @state() private _beamLengths: FlowBeamLengths = {};
+    /** The diagonal overlay's scale on screen, across and down, read with the beam lengths: what its surges are unscaled by. */
+    private _overlayScale: [number, number] = [1, 1];
     private readonly _host = new EnergyCardHost(this, {
         whichNodesToWalk: (_tree, energyNodes) => [
             energyNodes.solarNode,
@@ -221,7 +217,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
     protected updated(changed: PropertyValues): void {
         super.updated(changed);
-        alignToBeat(this.renderRoot);
+        syncFlowRates(this.renderRoot, (lengths) => {
+            const ctm = this.renderRoot.querySelector<SVGSVGElement>(".diagonal-overlay")?.getScreenCTM();
+            this._overlayScale = ctm ? [ctm.a, ctm.d] : [1, 1];
+            this._beamLengths = lengths;
+        });
     }
 
     // 10. Render method
@@ -240,19 +240,19 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         const effectiveGridPower = flows.gridPower;
 
         const edgeList = [
-            { key: "solarToGrid", from: "solar", max: energy.solarMaxPower, short: false },
-            { key: "solarToHouse", from: "solar", max: energy.solarMaxPower, short: true },
-            { key: "solarToBattery", from: "solar", max: energy.solarMaxPower, short: false },
-            { key: "gridToBattery", from: "grid", max: energy.gridMaxPower, short: true },
-            { key: "gridToHouse", from: "grid", max: energy.gridMaxPower, short: false },
-            { key: "batteryToHouse", from: "battery", max: energy.batteryMaxPower, short: false },
-            { key: "batteryToGrid", from: "battery", max: energy.batteryMaxPower, short: true },
+            { key: "solarToGrid", from: "solar", max: energy.solarMaxPower },
+            { key: "solarToHouse", from: "solar", max: energy.solarMaxPower },
+            { key: "solarToBattery", from: "solar", max: energy.solarMaxPower },
+            { key: "gridToBattery", from: "grid", max: energy.gridMaxPower },
+            { key: "gridToHouse", from: "grid", max: energy.gridMaxPower },
+            { key: "batteryToHouse", from: "battery", max: energy.batteryMaxPower },
+            { key: "batteryToGrid", from: "battery", max: energy.batteryMaxPower },
         ] as const;
         // An absent node has no maximum: its edge is drawn at the lowest ratio.
-        const edges = Object.fromEntries(edgeList.map(({ key, from, max, short }) => [key, {
-            power: flows[key], r: flowRatio(flows[key], max), color: getFlowColor(from as FlowSource), short,
+        const edges = Object.fromEntries(edgeList.map(({ key, from, max }) => [key, {
+            power: flows[key], r: flowRatio(flows[key], max), color: getFlowColor(from as FlowSource),
         }])) as Record<typeof edgeList[number]["key"], Edge>;
-        const edge = (key: keyof typeof edges): DrawnEdge => ({ active: edges[key].power > 0, beam: flowBeam(edges[key].r, edges[key].color), short: edges[key].short });
+        const edge = (key: keyof typeof edges): DrawnEdge => ({ active: edges[key].power > 0, r: edges[key].r, beam: flowBeam(edges[key].r, edges[key].color) });
 
         const solarFlowColor   = getFlowColor("solar");
         const gridFlowColor    = getFlowColor("grid");
@@ -373,15 +373,15 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         return parts.join("; ");
     }
 
-    /** A node's halo: the level and size on a static wrapper, only the opacity on the beat. */
+    /** A node's halo: the level and size on a static wrapper, only the opacity animated, at its own rate. */
     private _halo(halo: Halo | null) {
         if (!halo) return nothing;
-        const glow = flowGlow(halo.r, halo.phase);
+        const glow = flowGlow(halo.r);
         const { extent, background } = flowHalo(halo.color, glow.size);
         return html`
             <div class="halo-level" style="opacity: ${glow.level}">
-                <div class="halo" data-beat="glow" data-tier=${glow.tier}
-                    style="inset: -${extent}px; background: ${background}; --beat-delay: ${glow.delay}"></div>
+                <div class="halo" data-beat="glow" data-rate=${glow.rate}
+                    style="inset: -${extent}px; background: ${background}"></div>
             </div>`;
     }
 
@@ -425,7 +425,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
     /**
      * A beam from its first endpoint to its second: its bloom, the body in
-     * the flow's colour, a hot core along it, and the tier's surges, clipped
+     * the flow's colour, a hot core along it, and its surges, clipped
      * to the beam's ends by a mask of its own shape. The bloom is a blurred
      * copy of the body under it (a shadow's blur radius is twice the blur's
      * deviation) rather than a shadow of the body, so the body's opacity does
@@ -434,33 +434,45 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
      * Only the surges animate, and only their transform. vector-effect is
      * kept off them: a non-scaling stroke takes the animation off the
      * compositor, to a style recalc and a paint every frame. On the overlay,
-     * whose viewBox stretches with the card's configured size, a surge is
-     * drawn in px instead: unscaled by the overlay's scale and turned to the
-     * beam's on-screen angle.
+     * whose viewBox stretches with the card, a surge is drawn in px instead:
+     * unscaled by the overlay's scale on screen, read with the beam lengths,
+     * and turned to the beam's on-screen angle.
+     *
+     * The surges come from the beam's length on screen, as `syncFlowRates`
+     * measured it (`data-flow-beam`): how many, their rate, and on every beam
+     * but a vertical one, which takes its length as a CSS percentage, the
+     * blob's length and where its centre starts.
+     *
+     * The beam ends square, and so does its mask, so a surge shows exactly
+     * over the length its travel is reckoned from.
      */
-    private _flowLine(key: string, color: string, { beam, short }: DrawnEdge, x1: string, y1: string, x2: string, y2: string, nonScaling = false) {
+    private _flowLine(key: string, color: string, { r, beam }: DrawnEdge, x1: string, y1: string, x2: string, y2: string, nonScaling = false) {
         const gradientId = `${this._flowId}-${key}-gradient`;
         const maskId = `${this._flowId}-${key}-mask`;
         const vectorEffect = nonScaling ? "non-scaling-stroke" : "none";
-        const { reach, surges } = flowSurges(beam.tier, short, LEAVES_AT);
-        const travel = (start: string, end: string) =>
-            `${(parseFloat(end) - parseFloat(start)) * reach}${start.endsWith("%") ? "%" : "px"}`;
+        const length = this._beamLengths[key];
+        const { count, rate, surges } = flowSurges(r, length);
         // A vertical connector's length is its cell's height, a percentage of
         // it; every other beam is drawn in units its length can be taken in.
         const vertical = x1 === x2;
         const dx = parseFloat(x2) - parseFloat(x1);
         const dy = vertical ? 0 : parseFloat(y2) - parseFloat(y1);
         const halfThickness = beam.surgeThickness / 2;
-        const [scaleX, scaleY] = nonScaling
-            ? [(this._config?.width ?? OVERLAY_W) / OVERLAY_W, (this._config?.height ?? OVERLAY_H) / OVERLAY_H]
-            : [1, 1];
-        const halfLength = flowSurgeLength(Math.hypot(dx * scaleX, dy * scaleY)) / 2;
+        const halfLength = flowSurgeLength(length ?? 0) / 2;
+        // The share of the beam a surge's centre starts back from its start.
+        const share = length ? flowSurgeLead(length) / length : 0;
+        const [scaleX, scaleY] = nonScaling ? this._overlayScale : [1, 1];
+        // The beam's vector, and where a surge's centre starts: its lead back from the beam's start.
+        const surgeVector = vertical
+            ? `--surge-x: 0px; --surge-y: ${parseFloat(y2) - parseFloat(y1)}%; --surge-start-x: 0px; --surge-start-y: ${flowSurgeStartCss(Math.sign(parseFloat(y2) - parseFloat(y1)))}`
+            : `--surge-x: ${dx}px; --surge-y: ${dy}px; --surge-start-x: ${-dx * share}px; --surge-start-y: ${-dy * share}px`;
         const blob = vertical
             ? svg`<ellipse cx=${x1} cy=${y1} rx=${halfThickness} style="ry: calc(${FLOW_SURGE_LENGTH_CSS} / 2)" fill="url(#${gradientId})"/>`
             : nonScaling
                 ? svg`<ellipse rx=${halfLength} ry=${halfThickness} fill="url(#${gradientId})"
                         transform="translate(${x1} ${y1}) scale(${1 / scaleX} ${1 / scaleY}) rotate(${Math.atan2(dy * scaleY, dx * scaleX) * 180 / Math.PI})"/>`
                 : svg`<ellipse cx=${x1} cy=${y1} rx=${halfLength} ry=${halfThickness} fill="url(#${gradientId})"/>`;
+        // Keyed by their count: a new count starts the edge's surges afresh, together, so they stay evenly spread.
         return svg`
             <defs>
                 <radialGradient id=${gradientId}>
@@ -468,7 +480,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                 </radialGradient>
                 <mask id=${maskId} maskUnits="userSpaceOnUse" x="-1000" y="-1000" width="2000" height="2000">
                     <line x1=${x1} y1=${y1} x2=${x2} y2=${y2}
-                          stroke="white" stroke-width=${beam.surgeThickness} stroke-linecap="round"
+                          stroke="white" stroke-width=${beam.surgeThickness} stroke-linecap="butt"
                           vector-effect=${vectorEffect}/>
                 </mask>
             </defs>
@@ -476,7 +488,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                   stroke-width=${beam.width}
                   vector-effect=${vectorEffect}
                   style="stroke: ${beam.bloomColor}; filter: blur(${beam.bloomBlur / 2}px)"/>
-            <line class="flow-beam" data-flow=${key} x1=${x1} y1=${y1} x2=${x2} y2=${y2}
+            <line class="flow-beam" data-flow-beam=${key} data-flow=${key} x1=${x1} y1=${y1} x2=${x2} y2=${y2}
                   stroke=${color} stroke-width=${beam.width}
                   vector-effect=${vectorEffect}
                   style="opacity: ${beam.bodyOpacity}"/>
@@ -485,11 +497,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                   vector-effect=${vectorEffect}
                   style="stroke: ${flowHot(color)}; opacity: ${beam.bodyOpacity}"/>
             <g mask="url(#${maskId})" opacity=${beam.surgeOpacity}>
-                ${surges.map((surge) => svg`
-                    <g class="flow-surge" data-beat="surge" data-tier=${beam.tier} ?data-short=${short}
-                       style="--surge-x: ${travel(x1, x2)}; --surge-y: ${travel(y1, y2)}; --surge-rest: ${surge.rest}; --beat-delay: ${surge.delay}">
+                ${keyed(count, surges.map((surge) => svg`
+                    <g class="flow-surge" data-beat="surge" data-rate=${rate}
+                       style="${surgeVector}; --surge-rest: ${surge.rest}; animation-delay: ${surge.delay}">
                         ${blob}
-                    </g>`)}
+                    </g>`))}
             </g>
         `;
     }
