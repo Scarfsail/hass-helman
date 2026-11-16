@@ -3,13 +3,15 @@ import { CARD_BUNDLE, loadBundle } from "./support/card-page";
 import { installMockHass } from "./support/mock-hass";
 import { cardTree, treeNode, treePayload } from "./support/payload-builders";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
-import { flowGlow, flowGlowPeriodMs, flowLevel, flowSpeed, flowSurgeCount, flowSurgeLead, flowSurgeLength, flowSurgeRate, flowSurges, flowSurgeTravel, flowThickness } from "../cards/shared/flow-style";
+import { flowBeam, flowEase, flowGlow, flowGlowPeriodMs, flowGlowSize, flowLevel, flowRatio, flowScaleW, flowSpeed, flowSurgeCount, flowSurgeGradient, flowSurgeLead, flowSurgeLength, flowSurgeRate, flowSurges, flowSurgeTravel, flowThickness } from "../cards/shared/flow-style";
 
 /**
- * The look of a flow (#770, #776): one ratio per flow and per node,
- * `r = power / max`, drives the cues that agree with each other -- beam
- * thickness and brightness, surge count and speed, glow brightness, size and
- * rate -- as continuous curves. Each edge and each glow runs its own tempo; a
+ * The look of a flow (#770, #776, #778): one ratio per flow and per node,
+ * `r = clamp((power − 200) / (max − 200), 0, 1)` (the 200 W floor,
+ * `FLOW_FLOOR_W`) against one shared scale, drives through one easing
+ * `t = sqrt(r)` the cues that agree with each other -- beam thickness and
+ * brightness, surge width and speed, glow brightness, size and rate -- as
+ * continuous curves. Each edge and each glow runs its own tempo; a
  * surge's speed is a velocity on screen, px/s, from its power alone, and its
  * blob and the spacing between surges are fixed lengths on screen, so a flow
  * pulses at the same rhythm on every beam.
@@ -29,30 +31,95 @@ const strictlyFalling = (values: number[]) => values.every((value, index) => ind
 const strictlyRising = (values: number[]) => strictlyFalling([...values].reverse());
 
 test.describe("the tables, unit-checked", () => {
-    test("beam thickness is 2.5 px at least and 21 px at the maximum, 1.5 times the 14 px it was, and unchanged at the faint end", () => {
-        expect(RATIOS.map(flowThickness)).toEqual([2.5, 3.99, 4.2, 10.29, 10.5, 21].map((w) => expect.closeTo(w, 5)));
-        expect(flowThickness(1) / 14).toBeCloseTo(1.5, 10);
-        // Faint flows draw as they did: at the 2.5 px floor.
-        for (const r of [0, 0.001, 0.01, 0.05, 0.1]) expect(flowThickness(r)).toBe(2.5);
-        // Continuous in r: no step anywhere along it.
-        for (let r = 0; r < 1; r += 0.001) expect(Math.abs(flowThickness(r + 0.001) - flowThickness(r))).toBeLessThanOrEqual(0.021 + 1e-9);
+    test("every cue takes r through one easing, the square root", () => {
+        expect(RATIOS.map(flowEase)).toEqual(RATIOS.map((r) => expect.closeTo(Math.sqrt(r), 12)));
     });
 
-    test("the level runs from 0.2 to 1 along r^0.7", () => {
-        expect(RATIOS.map(flowLevel)).toEqual([0.2, 0.2 + 0.8 * 0.19 ** 0.7, 0.2 + 0.8 * 0.2 ** 0.7, 0.2 + 0.8 * 0.49 ** 0.7, 0.2 + 0.8 * 0.5 ** 0.7, 1]
-            .map((k) => expect.closeTo(k, 10)));
-        expect(flowLevel(0.5)).toBeCloseTo(0.6925, 4);
+    test("beam thickness runs from 1.5 px at r = 0 to 21 px at the maximum, along the square root", () => {
+        expect(RATIOS.map(flowThickness)).toEqual(RATIOS.map((r) => expect.closeTo(1.5 + 19.5 * Math.sqrt(r), 10)));
+        expect(flowThickness(0)).toBe(1.5);
+        expect(flowThickness(1)).toBe(21);
+        // A quarter of the scale is already half way up: 1.5 + 19.5 / 2.
+        expect(flowThickness(0.25)).toBeCloseTo(11.25, 10);
     });
 
-    test("a surge moves at 3 px/s at the faintest flow and 120 px/s at the maximum, linearly in r", () => {
+    test("the level runs from 0.2 to 1 along the square root", () => {
+        expect(RATIOS.map(flowLevel)).toEqual(RATIOS.map((r) => expect.closeTo(0.2 + 0.8 * Math.sqrt(r), 10)));
+        expect(flowLevel(0.25)).toBeCloseTo(0.6, 10);
+    });
+
+    test("a surge moves at 3 px/s at r = 0 and 60 px/s at the maximum, along the square root", () => {
         const speeds = RATIOS.map(flowSpeed);
-        expect(speeds).toEqual(RATIOS.map((r) => expect.closeTo(3 + 117 * r, 10)));
+        expect(speeds).toEqual(RATIOS.map((r) => expect.closeTo(3 + 57 * Math.sqrt(r), 10)));
         expect(speeds[0]).toBe(3);
-        expect(speeds.at(-1)).toBe(120);
+        expect(speeds.at(-1)).toBe(60);
         expect(strictlyRising(speeds)).toBe(true);
-        // 400 W of 10 kW crawls at about 8 px/s; 5 kW runs at about 62.
-        expect(flowSpeed(0.04)).toBeCloseTo(7.68, 10);
-        expect(flowSpeed(0.5)).toBeCloseTo(61.5, 10);
+        // 500 W of 17.25 kW moves at about 10.6 px/s; a quarter of the scale at 31.5.
+        expect(flowSpeed(flowRatio(500, 17_250))).toBeCloseTo(10.56, 2);
+        expect(flowSpeed(0.25)).toBeCloseTo(31.5, 10);
+    });
+
+    test("one curve: thickness, surge width and halo, level, glow size and speed all rise with r, each a fixed function of flowEase", () => {
+        const fine = Array.from({ length: 1001 }, (_, index) => index / 1000);
+        const cues = {
+            thickness: fine.map(flowThickness),
+            surge: fine.map((r) => flowBeam(r, "red").surgeThickness),
+            halo: fine.map((r) => { const beam = flowBeam(r, "red"); return beam.surgeWidth - beam.surgeThickness; }),
+            level: fine.map(flowLevel),
+            glow: fine.map(flowGlowSize),
+            speed: fine.map(flowSpeed),
+        };
+        for (const values of Object.values(cues)) expect(strictlyRising(values)).toBe(true);
+        // Each cue is the same affine map of t = flowEase(r) at every r: none reads r directly.
+        for (const [index, r] of fine.entries()) {
+            const t = flowEase(r);
+            expect(cues.thickness[index]).toBeCloseTo(1.5 + 19.5 * t, 10);
+            expect(cues.surge[index]).toBeCloseTo(1.5 + 19.5 * t + 4 + 8 * t, 10);
+            expect(cues.halo[index]).toBeCloseTo(2 * (2 + 6 * t), 10);
+            expect(cues.level[index]).toBeCloseTo(0.2 + 0.8 * t, 10);
+            expect(cues.glow[index]).toBeCloseTo(t, 10);
+            expect(cues.speed[index]).toBeCloseTo(3 + 57 * t, 10);
+        }
+    });
+
+    test("on one scale, 103 W draws thinner, dimmer, with a narrower surge and slower than 2.3 kW", () => {
+        const scale = 17_250;
+        const [small, large] = [103, 2300].map((power) => flowRatio(power, scale)).map((r) => ({ ...flowBeam(r, "red"), speed: flowSpeed(r), level: flowLevel(r) }));
+        expect(small.width).toBeLessThan(large.width);
+        expect(small.level).toBeLessThan(large.level);
+        expect(small.surgeThickness).toBeLessThan(large.surgeThickness);
+        expect(small.speed).toBeLessThan(large.speed);
+        // A bubble around the pipe: 5.5 px around 103 W's 1.5 px floor, about 15.2 around 2.3 kW's 8.3, inside a halo that grows too.
+        expect(small.surgeThickness).toBeCloseTo(5.5, 10);
+        expect(large.surgeThickness).toBeCloseTo(15.154, 2);
+        expect(small.surgeWidth - small.surgeThickness).toBeLessThan(large.surgeWidth - large.surgeThickness);
+        expect(flowBeam(1, "red")).toMatchObject({ surgeThickness: 33, surgeWidth: 49 });
+    });
+
+    test("a surge's gradient stops step in 0.05 of its width, so close powers paint the same gradient while the widths stay exact", () => {
+        const [a, b] = [2300, 2310].map((power) => flowBeam(flowRatio(power, 17_250), "red"));
+        expect(a.surgeWidth).not.toBe(b.surgeWidth);
+        expect(flowSurgeGradient("red", a)).toBe(flowSurgeGradient("red", b));
+        expect(flowSurgeGradient("red", flowBeam(0, "red"))).not.toBe(flowSurgeGradient("red", flowBeam(1, "red")));
+    });
+
+    test("a flow at or under the 200 W floor draws at r = 0, and the ratio runs from the floor to the scale, clamped", () => {
+        for (const power of [-500, 0, 103, 130, 200]) expect(flowRatio(power, 17_250)).toBe(0);
+        expect(flowRatio(17_250, 17_250)).toBe(1);
+        expect(flowRatio(40_000, 17_250)).toBe(1);
+        expect(flowRatio(8725, 17_250)).toBeCloseTo(0.5, 10);
+        // A scale at or under the floor, or none, draws everything at the lowest ratio.
+        for (const max of [null, undefined, 0, 150, 200]) expect(flowRatio(5000, max)).toBe(0);
+        // On the local 17.25 kW scale: 130 W on the floor, 500 W about 4.1 px, 2.3 kW about 8.3, 10 kW about 16.3.
+        expect([130, 500, 2300, 10_000].map((power) => flowThickness(flowRatio(power, 17_250))))
+            .toEqual([1.5, 4.087, 8.344, 16.284].map((width) => expect.closeTo(width, 2)));
+    });
+
+    test("the shared scale is the largest positive maximum, nulls ignored, else 0", () => {
+        expect(flowScaleW([5000, 11500, 5000])).toBe(11500);
+        expect(flowScaleW([null, 17250, undefined, 5000])).toBe(17250);
+        expect(flowScaleW([0, -10, null])).toBe(0);
+        expect(flowScaleW([])).toBe(0);
     });
 
     test("a surge's blob is 12 px long, and no more than 0.9 of a tiny beam", () => {
@@ -238,9 +305,9 @@ function expectRate(rate: number, expected: number): void {
 
 /**
  * 4 kW from the grid into the battery next to 0.9 kW from the grid to the
- * house, scaled by 1.6 to this tree's maxima (grid 11.5 kW, battery 5 kW):
- * the battery's flow runs at r ≈ 0.56 on a short edge, the house's at
- * r ≈ 0.13 on a long one.
+ * house, scaled by 1.6 to this tree's shared scale (the largest maximum,
+ * the grid's 11.5 kW): the battery's flow runs at r ≈ 0.56 on a short edge,
+ * the house's at r ≈ 0.13 on a long one.
  */
 const NIGHT_CHARGE = { solar: 0, house: 1440, battery: 6400, grid: 7840 };
 
@@ -275,7 +342,7 @@ test.describe("a strong flow next to a weak one", () => {
         });
         const strong = beams["grid-battery"];
         const weak = beams["grid-house"];
-        const expected = { strong: flowSurges(6400 / 11500, strong.length), weak: flowSurges(1440 / 11500, weak.length) };
+        const expected = { strong: flowSurges(flowRatio(6400, 11500), strong.length), weak: flowSurges(flowRatio(1440, 11500), weak.length) };
         expect(strong.width).toBeGreaterThan(weak.width);
         expect(strong.opacity).toBeGreaterThan(weak.opacity);
         // As many as each beam's length holds.
@@ -311,8 +378,9 @@ test.describe("a strong flow next to a weak one", () => {
         expect(halos.battery.size).toBeGreaterThan(halos.house.size);
         expect(halos.battery.level).toBeGreaterThan(halos.house.level);
         expect(halos.battery.period).toBeLessThan(halos.house.period);
-        // The battery is at its maximum: the 1300 ms cap, and no quicker.
-        expect(halos.battery.period).toBeCloseTo(1000 / flowGlow(1).rate, 5);
+        // Both against the shared scale, the grid's 11.5 kW, and never quicker than the 1300 ms cap.
+        expect(halos.battery.period).toBeCloseTo(1000 / flowGlow(flowRatio(6400, 11500)).rate, 5);
+        expect(halos.house.period).toBeCloseTo(1000 / flowGlow(flowRatio(1440, 11500)).rate, 5);
         expect(halos.battery.period).toBeGreaterThanOrEqual(1300);
         expect(halos.battery.floor).toBeGreaterThan(0);
         expect(halos.house.floor).toBeGreaterThan(0);
@@ -398,10 +466,10 @@ const LOOP_OVERLAPS = `(root, key, steps, half) => {
 const NEVER_EMPTY_BEAMS = ["solar-house", "battery-house", "grid-house"];
 
 for (const [name, powers] of [
-    // r ≈ 0.01: 60 W of solar (max 5 kW) and of battery (max 5 kW), 120 W of grid (max 11.5 kW), all to the house.
+    // r = 0: 60 W of solar and of battery, 120 W of grid, all to the house, under the 200 W floor of the shared 11.5 kW scale.
     ["just above idle", { solar: 60, house: 240, battery: -60, grid: 120 }],
-    // r = 1: each at its maximum.
-    ["at the maximum", { solar: 5000, house: 21500, battery: -5000, grid: 11500 }],
+    // r = 1: each at the shared scale, the grid's 11.5 kW.
+    ["at the maximum", { solar: 11500, house: 34500, battery: -11500, grid: 11500 }],
 ] as const) {
     test(`${name}, a beam always has a blob overlapping it by more than 1 px, through a whole loop`, async ({ page }) => {
         await mountSimpleCard(page, powers);
@@ -466,7 +534,7 @@ test("at the same r, a short beam and a long one move their surges at the same p
         { host: "power-flow-arrows", beam: "0" },
     ]);
     expect(diagonal.length).toBeGreaterThan(3 * arrow.length);
-    const expected = flowSpeed(1440 / 11500);
+    const expected = flowSpeed(flowRatio(1440, 11500));
     for (const { speed } of [diagonal, arrow]) {
         expectSpeed(speed, expected);
     }
@@ -482,7 +550,7 @@ test("at the same power, a short beam and a long one pulse at the same rhythm", 
         { host: "helman-simple-card", beam: "battery-house" },
     ]);
     expect(battery.length).toBeGreaterThan(1.5 * solar.length);
-    const expected = flowSpeed(400 / 5000);
+    const expected = flowSpeed(flowRatio(400, 11500));
     for (const beam of [solar, battery]) {
         expectSpeed(beam.speed, expected);
         expect(beam.count).toBe(flowSurgeCount(beam.length));
@@ -507,8 +575,8 @@ test("a stronger flow moves quicker on screen than a weaker one, even when the w
     ]);
     expect(solar.length).toBeLessThan(battery.length);
     expect(battery.speed).toBeGreaterThan(solar.speed);
-    expectSpeed(solar.speed, flowSpeed(274 / 5000));
-    expectSpeed(battery.speed, flowSpeed(585 / 5000));
+    expectSpeed(solar.speed, flowSpeed(flowRatio(274, 11500)));
+    expectSpeed(battery.speed, flowSpeed(flowRatio(585, 11500)));
 });
 
 test("a beam the layout resizes is measured again, and its surges keep their px/s", async ({ page }) => {
@@ -523,7 +591,7 @@ test("a beam the layout resizes is measured again, and its surges keep their px/
         card.requestUpdate();
         await card.updateComplete;
     });
-    const expected = flowSpeed(1440 / 11500);
+    const expected = flowSpeed(flowRatio(1440, 11500));
     await expect.poll(async () => (await surgeSpeeds(page, [beam]))[0].length).toBeGreaterThan(before.length + 20);
     await settled(page);
     // Once measured again, it carries as many surges as its new length holds, each at the same px/s.
@@ -653,6 +721,29 @@ test("every beam ends straight and square: butt caps on the simple card, square 
     for (const children of ends.arrowChildren) expect(children).toEqual(["segments", "core"]);
 });
 
+test("a wide surge stays inside its own column, however narrow the columns are", async ({ page }) => {
+    // Eight consumers at the maximum in a phone-width row: each column narrower than a full surge's 49 px.
+    await page.setContent(PAGE);
+    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
+    await page.waitForFunction(() => !!customElements.get("power-flow-arrows"));
+    await page.evaluate(() => { document.getElementById("stage")!.style.width = "320px"; });
+    await addArrows(page, Array(8).fill(11_500), 11_500);
+    const boxes = await page.evaluate(() => {
+        const root = document.querySelector("power-flow-arrows")!.shadowRoot!;
+        return [...root.querySelectorAll<HTMLElement>(".item-container")].map((column) => {
+            const outer = column.getBoundingClientRect();
+            const inner = column.querySelector(".surges")!.getBoundingClientRect();
+            return { column: outer.width, left: inner.left - outer.left, right: outer.right - inner.right };
+        });
+    });
+    expect(boxes).toHaveLength(8);
+    for (const { column, left, right } of boxes) {
+        expect(column).toBeLessThan(flowBeam(1, "red").surgeWidth);
+        expect(left).toBeGreaterThanOrEqual(-0.01);
+        expect(right).toBeGreaterThanOrEqual(-0.01);
+    }
+});
+
 // ── Rates ────────────────────────────────────────────────────────────────────
 
 test("animations the browser recreates on a remount, on being shown or after a pause run at their element's rate", async ({ page }) => {
@@ -759,7 +850,7 @@ test("a power change retunes the rate in place: no animation restarts and no sur
     // And the change did reach the page: the weak flow is brighter.
     const opacity = await page.evaluate(() =>
         Number(getComputedStyle(document.querySelector("helman-simple-card")!.shadowRoot!.querySelector('line[data-flow="grid-house"]')!).opacity));
-    expect(opacity).toBeCloseTo(0.25 + 0.65 * flowLevel(1600 / 11500), 5);
+    expect(opacity).toBeCloseTo(0.25 + 0.65 * flowLevel(flowRatio(1600, 11500)), 5);
 });
 
 test.describe("reduced motion", () => {
@@ -969,6 +1060,76 @@ test("on the helman card the top-level rows glow and the house's devices never d
     expect(devices.every(([, glowing]) => !glowing)).toBe(true);
 });
 
+test("the helman card draws its arrows against the largest node maximum, and ignores a max_power left in its config", async ({ page }) => {
+    // 103 W of solar next to 2.3 kW imported from the grid, on the tree's shared scale: the grid's 11.5 kW.
+    await page.setContent("<!doctype html><html><body></body></html>");
+    await installMockHass(page);
+    await page.evaluate((payload) => {
+        const watts = (value: number) => ({ state: String(value), attributes: { unit_of_measurement: "W" } });
+        (window as any).__hass = {
+            ...window.__mockHass({
+                "helman/get_device_tree": payload,
+                "helman/get_history": { entity_history: {} },
+                "helman/get_node_detail": { entities: {} },
+            }),
+            language: "en", locale: { language: "en" }, config: { time_zone: "UTC" },
+            states: { "sensor.solar": watts(103), "sensor.battery": watts(0), "sensor.grid": watts(2300), "sensor.house": watts(2403) },
+        };
+    }, cardTree());
+    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
+    await page.evaluate(() => {
+        const card = document.createElement("helman-card") as any;
+        // A dashboard saved before the option was removed still carries it; it scales nothing.
+        card.setConfig({ type: "custom:helman-card", max_power: 1000 });
+        card.hass = (window as any).__hass;
+        document.body.appendChild(card);
+    });
+
+    const arrows = () => page.evaluate(() => {
+        const card = document.querySelector("helman-card")!.shadowRoot!;
+        const root = card.querySelector("power-flow-arrows")!.shadowRoot!;
+        return Object.fromEntries([...root.querySelectorAll<HTMLElement>("[data-flow-beam]")].map((beam) => [beam.dataset.flowBeam, {
+            width: parseFloat(beam.style.width),
+            surge: parseFloat(beam.querySelector<HTMLElement>(".surges")!.style.width),
+            opacity: Number(beam.querySelector<HTMLElement>(".body")!.style.opacity),
+            rate: Number(beam.querySelector("[data-beat]")?.getAttribute("data-rate") ?? 0),
+        }]));
+    });
+    // The source row: solar, grid, battery (idle, no beam).
+    await expect.poll(async () => { const drawn = await arrows(); return [0, 1].every((index) => drawn[index]?.rate > 0); }).toBe(true);
+    const { 0: solar, 1: grid } = await arrows();
+    expect(solar.width).toBeCloseTo(flowThickness(flowRatio(103, 11500)), 3);
+    expect(grid.width).toBeCloseTo(flowThickness(flowRatio(2300, 11500)), 3);
+    expect(solar.width).toBeLessThan(grid.width);
+    // Each surge is drawn as wide as its bubble and halo, the 103 W one the narrower.
+    expect(solar.surge).toBeCloseTo(flowBeam(flowRatio(103, 11500), "red").surgeWidth, 3);
+    expect(grid.surge).toBeCloseTo(flowBeam(flowRatio(2300, 11500), "red").surgeWidth, 3);
+    expect(solar.surge).toBeLessThan(grid.surge);
+    expect(solar.opacity).toBeLessThan(grid.opacity);
+    expect(solar.rate).toBeLessThan(grid.rate);
+});
+
+test("the simple card draws a 103 W flow thinner, with a narrower surge, than a 2.3 kW one on the same scale", async ({ page }) => {
+    // 103 W of solar and 2.3 kW from the grid into the house, on the tree's shared scale: the grid's 11.5 kW.
+    await mountSimpleCard(page, { solar: 103, house: 2403, battery: 0, grid: 2300 });
+    await settled(page);
+    const beams = await page.evaluate(() => {
+        const root = document.querySelector("helman-simple-card")!.shadowRoot!;
+        return Object.fromEntries(["solar-house", "grid-house"].map((flow) => [flow, {
+            width: Number(root.querySelector(`line[data-flow="${flow}"]`)!.getAttribute("stroke-width")),
+            surge: Number(root.querySelector(`mask[id$="-${flow}-mask"] line`)!.getAttribute("stroke-width")),
+        }]));
+    });
+    const { "solar-house": solar, "grid-house": grid } = beams;
+    expect(solar.width).toBeCloseTo(flowThickness(flowRatio(103, 11500)), 3);
+    expect(grid.width).toBeCloseTo(flowThickness(flowRatio(2300, 11500)), 3);
+    expect(solar.width).toBeLessThan(grid.width);
+    // Each surge's mask is as wide as its bubble and halo, the 103 W one the narrower.
+    expect(solar.surge).toBeCloseTo(flowBeam(flowRatio(103, 11500), "red").surgeWidth, 3);
+    expect(grid.surge).toBeCloseTo(flowBeam(flowRatio(2300, 11500), "red").surgeWidth, 3);
+    expect(solar.surge).toBeLessThan(grid.surge);
+});
+
 test("an edge's surges are spread evenly over one crossing, at their flow's speed over their beam's length", () => {
     // The faintest flow on a 28 px beam: one surge, at 3 px/s over 28 + 12 - 3 px.
     expect(flowSurges(0, 28)).toEqual({
@@ -976,10 +1137,10 @@ test("an edge's surges are spread evenly over one crossing, at their flow's spee
         rate: 0.0811,
         surges: [{ delay: "0ms", rest: 0.5 }],
     });
-    // The strongest on a 107 px beam: three, a third of the loop apart, at 120 px/s over 107 + 12 - 3 px.
+    // The strongest on a 107 px beam: three, a third of the loop apart, at 60 px/s over 107 + 12 - 3 px.
     expect(flowSurges(1, 107)).toEqual({
         count: 3,
-        rate: 1.03,
+        rate: 0.517,
         surges: [{ delay: "0ms", rest: 0.25 }, { delay: "-333ms", rest: 0.5 }, { delay: "-667ms", rest: 0.75 }],
     });
     // A beam not measured yet, or not laid out, carries none.

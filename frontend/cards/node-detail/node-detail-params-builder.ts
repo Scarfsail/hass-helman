@@ -7,7 +7,6 @@ import type { EnergyReadings } from "./node-detail-readings";
 export interface NodeDetailContext {
     /** The card's live power split, W, every flow kept however small. */
     flows: LiveFlows;
-    flowScaleW: number | null;
     batteryPower: number;
     /** The battery meter, positive charging; `null` without a reading. */
     batteryPowerReading: number | null;
@@ -42,7 +41,6 @@ export function buildNodeDetailContext(
             batteryPower: readings.batteryPowerReading ?? 0,
             gridPower: readings.gridPowerSigned ?? 0,
         }, { threshold: false }),
-        flowScaleW: readings.flowScaleW,
         batteryPower: readings.batteryPower,
         batteryPowerReading: readings.batteryPowerReading,
         solarPowerReading: readings.solarPowerReading,
@@ -66,7 +64,7 @@ export function buildNodeDetailParams(
     // The split reads a missing meter as 0 and every edge is a residual of the
     // others: without the solar, battery or house reading it is not known, never a zero.
     const known = context.solarPowerReading !== null && context.batteryPowerReading !== null && context.houseReadable;
-    const flow = { flows: known ? context.flows : null, flowScaleW: context.flowScaleW, sectionRequest };
+    const flow = { flows: known ? context.flows : null, sectionRequest };
     if (typeof request !== "string") {
         return { ...flow, nodeType: "device", item: request, ancestors: deviceAncestors(context.houseNode, request) };
     }

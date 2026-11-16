@@ -240,17 +240,18 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         const effectiveGridPower = flows.gridPower;
 
         const edgeList = [
-            { key: "solarToGrid", from: "solar", max: energy.solarMaxPower },
-            { key: "solarToHouse", from: "solar", max: energy.solarMaxPower },
-            { key: "solarToBattery", from: "solar", max: energy.solarMaxPower },
-            { key: "gridToBattery", from: "grid", max: energy.gridMaxPower },
-            { key: "gridToHouse", from: "grid", max: energy.gridMaxPower },
-            { key: "batteryToHouse", from: "battery", max: energy.batteryMaxPower },
-            { key: "batteryToGrid", from: "battery", max: energy.batteryMaxPower },
+            { key: "solarToGrid", from: "solar" },
+            { key: "solarToHouse", from: "solar" },
+            { key: "solarToBattery", from: "solar" },
+            { key: "gridToBattery", from: "grid" },
+            { key: "gridToHouse", from: "grid" },
+            { key: "batteryToHouse", from: "battery" },
+            { key: "batteryToGrid", from: "battery" },
         ] as const;
-        // An absent node has no maximum: its edge is drawn at the lowest ratio.
-        const edges = Object.fromEntries(edgeList.map(({ key, from, max }) => [key, {
-            power: flows[key], r: flowRatio(flows[key], max), color: getFlowColor(from as FlowSource),
+        // Every edge and halo is drawn against the one shared scale, so equal watts look equal.
+        const scale = energy.flowScaleW;
+        const edges = Object.fromEntries(edgeList.map(({ key, from }) => [key, {
+            power: flows[key], r: flowRatio(flows[key], scale), color: getFlowColor(from as FlowSource),
         }])) as Record<typeof edgeList[number]["key"], Edge>;
         const edge = (key: keyof typeof edges): DrawnEdge => ({ active: edges[key].power > 0, r: edges[key].r, beam: flowBeam(edges[key].r, edges[key].color) });
 
@@ -269,16 +270,15 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
         const gridStyle = this._buildGridStyle();
 
-        // Each node's ratio from its own total power; the house's against the largest maximum.
-        const houseMax = Math.max(0, ...[energy.solarMaxPower, energy.gridMaxPower, energy.batteryMaxPower].filter((max): max is number => max !== null));
+        // Each node's ratio from its own total power.
         const halos = {
-            solar: nodeHalo(flowRatio(solarPower, energy.solarMaxPower), solarFlowColor,
+            solar: nodeHalo(flowRatio(solarPower, scale), solarFlowColor,
                 [edges.solarToGrid, edges.solarToHouse, edges.solarToBattery], []),
-            grid: nodeHalo(flowRatio(Math.abs(effectiveGridPower), energy.gridMaxPower), gridFlowColor,
+            grid: nodeHalo(flowRatio(Math.abs(effectiveGridPower), scale), gridFlowColor,
                 [edges.gridToBattery, edges.gridToHouse], [edges.solarToGrid, edges.batteryToGrid], gridSourceColor),
-            house: nodeHalo(flowRatio(housePower, houseMax), "var(--helman-house)",
+            house: nodeHalo(flowRatio(housePower, scale), "var(--helman-house)",
                 [], [edges.solarToHouse, edges.gridToHouse, edges.batteryToHouse], houseSourceColor),
-            battery: nodeHalo(flowRatio(Math.abs(batteryPower), energy.batteryMaxPower), batteryFlowColor,
+            battery: nodeHalo(flowRatio(Math.abs(batteryPower), scale), batteryFlowColor,
                 [edges.batteryToHouse, edges.batteryToGrid], [edges.solarToBattery, edges.gridToBattery], battSourceColor),
         };
 
@@ -457,7 +457,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         const vertical = x1 === x2;
         const dx = parseFloat(x2) - parseFloat(x1);
         const dy = vertical ? 0 : parseFloat(y2) - parseFloat(y1);
-        const halfThickness = beam.surgeThickness / 2;
+        const halfThickness = beam.surgeWidth / 2;
         const halfLength = flowSurgeLength(length ?? 0) / 2;
         // The share of the beam a surge's centre starts back from its start.
         const share = length ? flowSurgeLead(length) / length : 0;
@@ -476,11 +476,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         return svg`
             <defs>
                 <radialGradient id=${gradientId}>
-                    ${flowSurgeStops(color).map(([offset, stop]) => svg`<stop offset=${offset} style="stop-color: ${offset === 1 ? color : stop}; stop-opacity: ${offset === 1 ? 0 : 1}"/>`)}
+                    ${flowSurgeStops(color, beam).map(([offset, stop]) => svg`<stop offset=${offset} style="stop-color: ${offset === 1 ? color : stop}; stop-opacity: ${offset === 1 ? 0 : 1}"/>`)}
                 </radialGradient>
                 <mask id=${maskId} maskUnits="userSpaceOnUse" x="-1000" y="-1000" width="2000" height="2000">
                     <line x1=${x1} y1=${y1} x2=${x2} y2=${y2}
-                          stroke="white" stroke-width=${beam.surgeThickness} stroke-linecap="butt"
+                          stroke="white" stroke-width=${beam.surgeWidth} stroke-linecap="butt"
                           vector-effect=${vectorEffect}/>
                 </mask>
             </defs>

@@ -10,7 +10,6 @@ import { EnergyCardHost } from "../shared/energy-card-host";
 import type { LocalizeFunction } from "../localize/localize";
 import "../node-detail/node-detail-dialog";
 import "../helman-simple/inverter-cell";
-import { DEFAULT_MAX_POWER } from "./power-flow-arrows";
 import type { RowBeat } from "./tree-item-row";
 import { helmanColorVars } from "../color-vars";
 import "./tree-item-info";
@@ -109,7 +108,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const historyBuckets = this._uiConfig.history_buckets;
         const historyBucketDuration = this._uiConfig.history_bucket_duration;
         const dialogParams = this._host.dialogParams;
-        const maxPower = this.config?.max_power || DEFAULT_MAX_POWER;
+        const maxPower = this._host.readings?.flowScaleW ?? 0;
         const beats = this._rowBeats(maxPower);
 
         return html`

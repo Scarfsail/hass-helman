@@ -6,7 +6,7 @@ import { IDLE_W, liveFlows } from "../cards/node-detail/live-flows";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
 import { CARD_BUNDLE } from "./support/card-page";
-import { flowSurges, flowThickness } from "../cards/shared/flow-style";
+import { flowRatio, flowSurges, flowThickness } from "../cards/shared/flow-style";
 
 /**
  * The live power split between solar, grid, battery and house.
@@ -159,8 +159,10 @@ function lines(page: Page): Promise<Line[]> {
 const SOLAR = "var(--helman-solar)";
 const GRID = "var(--helman-grid)";
 const BATTERY = "var(--helman-battery)";
-/** The card's beam: as thick as its ratio of the source's maximum says. */
-const stroke = (watts: number, max: number) => flowThickness(Math.min(watts / max, 1));
+/** The shared scale every flow is drawn against: the largest node maximum, the grid's 11.5 kW. */
+const SCALE = 11500;
+/** The card's beam: as thick as its ratio of the shared scale, above the floor, says. */
+const stroke = (watts: number) => flowThickness(flowRatio(watts, SCALE));
 
 test.describe("the card draws the split as before", () => {
     test("measured export keeps the grid meter value and export connectors", async ({ page }) => {
@@ -179,11 +181,11 @@ test.describe("the card draws the split as before", () => {
         expect(drawn).toHaveLength(3);
         // Solar → grid along the top, solar → house down the left, solar → battery across.
         expect(drawn[0]).toMatchObject({ stroke: SOLAR, x1: "-22.5", x2: "53" });
-        expect(drawn[0].width).toBeCloseTo(stroke(2400, 5000));
+        expect(drawn[0].width).toBeCloseTo(stroke(2400));
         expect(drawn[1]).toMatchObject({ stroke: SOLAR, x1: "50%", y1: "0%", y2: "100%" });
-        expect(drawn[1].width).toBeCloseTo(stroke(900, 5000));
+        expect(drawn[1].width).toBeCloseTo(stroke(900));
         expect(drawn[2]).toMatchObject({ stroke: SOLAR, x1: "62", y1: "48", x2: "138", y2: "120" });
-        expect(drawn[2].width).toBeCloseTo(stroke(3200, 5000));
+        expect(drawn[2].width).toBeCloseTo(stroke(3200));
     });
 
     test("evening: the battery and the grid supply the house", async ({ page }) => {
@@ -191,9 +193,9 @@ test.describe("the card draws the split as before", () => {
         const drawn = await lines(page);
         expect(drawn).toHaveLength(2);
         expect(drawn[0]).toMatchObject({ stroke: GRID, x1: "138", y1: "48", x2: "62", y2: "120" });
-        expect(drawn[0].width).toBeCloseTo(stroke(300, 11500));
+        expect(drawn[0].width).toBeCloseTo(stroke(300));
         expect(drawn[1]).toMatchObject({ stroke: BATTERY, x1: "130", y1: "133", x2: "70", y2: "133" });
-        expect(drawn[1].width).toBeCloseTo(stroke(1500, 5000));
+        expect(drawn[1].width).toBeCloseTo(stroke(1500));
     });
 
     test("a battery exporting past a grid meter at ≈ 0 shows the export the balance implies", async ({ page }) => {
@@ -202,9 +204,9 @@ test.describe("the card draws the split as before", () => {
         expect(drawn).toHaveLength(2);
         // Battery → grid up the right, battery → house along the bottom.
         expect(drawn[0]).toMatchObject({ stroke: BATTERY, x1: "50%", y1: "100%", y2: "0%" });
-        expect(drawn[0].width).toBeCloseTo(stroke(1500, 5000));
+        expect(drawn[0].width).toBeCloseTo(stroke(1500));
         expect(drawn[1]).toMatchObject({ stroke: BATTERY, x1: "130", x2: "70" });
-        expect(drawn[1].width).toBeCloseTo(stroke(500, 5000));
+        expect(drawn[1].width).toBeCloseTo(stroke(500));
         const gridPower = await page.evaluate(() =>
             (document.querySelector("helman-simple-card")!.shadowRoot!.querySelector("simple-card-grid") as any).power);
         expect(gridPower).toBe(-1500);
@@ -216,9 +218,9 @@ test.describe("the card draws the split as before", () => {
         // Solar → house, grid → battery down the right, grid → house across.
         expect(drawn.map((line) => line.stroke)).toEqual([SOLAR, GRID, GRID]);
         expect(drawn[1]).toMatchObject({ x1: "50%", y1: "0%", y2: "100%" });
-        expect(drawn[1].width).toBeCloseTo(stroke(2000, 11500));
+        expect(drawn[1].width).toBeCloseTo(stroke(2000));
         expect(drawn[2]).toMatchObject({ x1: "138", y1: "48", x2: "62", y2: "120" });
-        expect(drawn[2].width).toBeCloseTo(stroke(400, 11500));
+        expect(drawn[2].width).toBeCloseTo(stroke(400));
     });
 
     test("solar over the idle threshold draws no path to a house taking none of it", async ({ page }) => {
@@ -264,7 +266,7 @@ test("the beams carry their surges in the flow direction at their own tempo, ove
     });
     expect(beams.map(beam => beam.flow)).toEqual(["solar-grid", "solar-house", "solar-battery"]);
     for (const [beam, watts] of [[beams[0], 2400], [beams[1], 900], [beams[2], 3200]] as const) {
-        const { rate, surges } = flowSurges(watts / 5000, beam.length);
+        const { rate, surges } = flowSurges(flowRatio(watts, SCALE), beam.length);
         expect(beam.coreWidth).toBeCloseTo(beam.width * 0.35, 5);
         // As many surges as the beam's length on screen holds, spread evenly over one crossing, each at its
         // speed over that length: within 1 %, as the card measured the beam on its own.
