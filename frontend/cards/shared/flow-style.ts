@@ -38,7 +38,7 @@ const SURGE_BASE_MS = 1000;
 const GLOW_BASE_MS = 1000;
 
 /** A surge's speed on screen, px/s, from `t` = 0 to 1, on every edge. */
-const SURGE_SPEED = [3, 120] as const;
+const SURGE_SPEED = [3, 60] as const;
 
 /** How far apart an edge's surges are, px of their path on screen, about. */
 const SURGE_SPACING = 40;

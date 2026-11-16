@@ -48,15 +48,15 @@ test.describe("the tables, unit-checked", () => {
         expect(flowLevel(0.25)).toBeCloseTo(0.6, 10);
     });
 
-    test("a surge moves at 3 px/s at r = 0 and 120 px/s at the maximum, along the square root", () => {
+    test("a surge moves at 3 px/s at r = 0 and 60 px/s at the maximum, along the square root", () => {
         const speeds = RATIOS.map(flowSpeed);
-        expect(speeds).toEqual(RATIOS.map((r) => expect.closeTo(3 + 117 * Math.sqrt(r), 10)));
+        expect(speeds).toEqual(RATIOS.map((r) => expect.closeTo(3 + 57 * Math.sqrt(r), 10)));
         expect(speeds[0]).toBe(3);
-        expect(speeds.at(-1)).toBe(120);
+        expect(speeds.at(-1)).toBe(60);
         expect(strictlyRising(speeds)).toBe(true);
-        // 500 W of 17.25 kW moves at about 18.5 px/s; a quarter of the scale at 61.5.
-        expect(flowSpeed(flowRatio(500, 17_250))).toBeCloseTo(18.52, 2);
-        expect(flowSpeed(0.25)).toBeCloseTo(61.5, 10);
+        // 500 W of 17.25 kW moves at about 10.6 px/s; a quarter of the scale at 31.5.
+        expect(flowSpeed(flowRatio(500, 17_250))).toBeCloseTo(10.56, 2);
+        expect(flowSpeed(0.25)).toBeCloseTo(31.5, 10);
     });
 
     test("one curve: thickness, surge width and halo, level, glow size and speed all rise with r, each a fixed function of flowEase", () => {
@@ -78,7 +78,7 @@ test.describe("the tables, unit-checked", () => {
             expect(cues.halo[index]).toBeCloseTo(2 * (2 + 6 * t), 10);
             expect(cues.level[index]).toBeCloseTo(0.2 + 0.8 * t, 10);
             expect(cues.glow[index]).toBeCloseTo(t, 10);
-            expect(cues.speed[index]).toBeCloseTo(3 + 117 * t, 10);
+            expect(cues.speed[index]).toBeCloseTo(3 + 57 * t, 10);
         }
     });
 
@@ -1137,10 +1137,10 @@ test("an edge's surges are spread evenly over one crossing, at their flow's spee
         rate: 0.0811,
         surges: [{ delay: "0ms", rest: 0.5 }],
     });
-    // The strongest on a 107 px beam: three, a third of the loop apart, at 120 px/s over 107 + 12 - 3 px.
+    // The strongest on a 107 px beam: three, a third of the loop apart, at 60 px/s over 107 + 12 - 3 px.
     expect(flowSurges(1, 107)).toEqual({
         count: 3,
-        rate: 1.03,
+        rate: 0.517,
         surges: [{ delay: "0ms", rest: 0.25 }, { delay: "-333ms", rest: 0.5 }, { delay: "-667ms", rest: 0.75 }],
     });
     // A beam not measured yet, or not laid out, carries none.
