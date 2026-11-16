@@ -6,6 +6,13 @@ import { helmanColorVars } from "../color-vars";
 import { WIRE_SWEEP_MS } from "../shared/flow-style";
 import { simpleCardSharedStyles } from "./simple-card-shared-styles";
 
+/** The pylon's three wires: their path, and their top and bottom ends, in its view box. */
+const WIRES = [
+    { d: "M17,29 Q14,46 13,58", top: [17, 29], bottom: [13, 58] },
+    { d: "M40,24 Q40,44 40,58", top: [40, 24], bottom: [40, 58] },
+    { d: "M63,29 Q66,46 67,58", top: [63, 29], bottom: [67, 58] },
+] as const;
+
 @customElement("simple-card-grid")
 export class SimpleCardGrid extends LitElement {
     // Static styles
@@ -33,28 +40,21 @@ export class SimpleCardGrid extends LitElement {
         .wire { stroke: var(--simple-card-neutral-stroke-soft); stroke-width: 1.5; fill: none; transition: stroke 0.6s; }
         /* wire color when active is set dynamically via sourceColor prop */
 
-        .dot-import {
-            fill: var(--simple-card-grid-accent);
-            animation: flow-in ${unsafeCSS(WIRE_SWEEP_MS)}ms linear infinite;
+        /*
+         * A dot runs down its wire, from its top end to its bottom one on import and back on
+         * export, fading in and out at the ends. Only its transform and opacity animate, so the
+         * compositor runs it without a style recalc, a layout or a paint on the main thread.
+         */
+        .dot {
+            animation: wire-dot ${unsafeCSS(WIRE_SWEEP_MS)}ms linear infinite;
         }
+        .dot-import { fill: var(--simple-card-grid-accent); }
         /* export dot color is set dynamically via sourceColor prop */
-        .dot-export {
-            animation: flow-out ${unsafeCSS(WIRE_SWEEP_MS)}ms linear infinite;
-        }
-
-        /* Import: dots move from right to center (toward house) */
-        @keyframes flow-in {
-            0%   { offset-distance: 0%;   opacity: 0; }
+        @keyframes wire-dot {
+            0%   { transform: translate(var(--from-x), var(--from-y)); opacity: 0; }
             10%  { opacity: 1; }
             90%  { opacity: 1; }
-            100% { offset-distance: 100%; opacity: 0; }
-        }
-        /* Export: dots move from center outward */
-        @keyframes flow-out {
-            0%   { offset-distance: 100%; opacity: 0; }
-            10%  { opacity: 1; }
-            90%  { opacity: 1; }
-            100% { offset-distance: 0%;   opacity: 0; }
+            100% { transform: translate(var(--to-x), var(--to-y)); opacity: 0; }
         }
 
         .power-label.import { color: var(--simple-card-source-grid); }
@@ -62,11 +62,6 @@ export class SimpleCardGrid extends LitElement {
     `];
 
     // Private properties
-    private readonly _uid = Math.random().toString(36).slice(2);
-    private get _wlId() { return `wl-${this._uid}`; }
-    private get _wcId() { return `wc-${this._uid}`; }
-    private get _wrId() { return `wr-${this._uid}`; }
-
     // Public properties
     /** Positive = importing from grid, negative = exporting to grid */
     @property({ type: Number }) public power = 0;
@@ -118,39 +113,21 @@ export class SimpleCardGrid extends LitElement {
             <circle class="pole ${stateClass}" cx="40" cy="21" r="3"/>
             <circle class="pole ${stateClass}" cx="63" cy="26" r="3"/>
             <!-- Wires -->
-            <path class="wire" style="${wireStyle}" d="M17,29 Q14,46 13,58"/>
-            <path class="wire" style="${wireStyle}" d="M40,24 Q40,44 40,58"/>
-            <path class="wire" style="${wireStyle}" d="M63,29 Q66,46 67,58"/>
+            ${WIRES.map((wire) => svg`<path class="wire" style="${wireStyle}" d="${wire.d}"/>`)}
         `;
     }
 
+    /**
+     * One dot per wire, a quarter of a sweep apart, each running straight between its wire's
+     * ends: the wires bow by at most a unit of the 110-unit view box, so a straight run stays on them.
+     */
     private _renderFlowDots(importing: boolean, dotColor: string) {
         const dotClass = importing ? 'dot-import' : 'dot-export';
-        const dotStyle = importing ? '' : `fill: ${dotColor}`;
-        return svg`
-            <circle class="dot ${dotClass}" style="${dotStyle}" r="3">
-                <animateMotion dur="${WIRE_SWEEP_MS}ms" repeatCount="indefinite" begin="0ms"
-                    keyPoints="${importing ? '0;1' : '1;0'}" keyTimes="0;1" calcMode="linear">
-                    <mpath href="#${this._wlId}"/>
-                </animateMotion>
-            </circle>
-            <circle class="dot ${dotClass}" style="${dotStyle}" r="3">
-                <animateMotion dur="${WIRE_SWEEP_MS}ms" repeatCount="indefinite" begin="${WIRE_SWEEP_MS / 4}ms"
-                    keyPoints="${importing ? '0;1' : '1;0'}" keyTimes="0;1" calcMode="linear">
-                    <mpath href="#${this._wcId}"/>
-                </animateMotion>
-            </circle>
-            <circle class="dot ${dotClass}" style="${dotStyle}" r="3">
-                <animateMotion dur="${WIRE_SWEEP_MS}ms" repeatCount="indefinite" begin="${WIRE_SWEEP_MS / 2}ms"
-                    keyPoints="${importing ? '0;1' : '1;0'}" keyTimes="0;1" calcMode="linear">
-                    <mpath href="#${this._wrId}"/>
-                </animateMotion>
-            </circle>
-            <defs>
-                <path id="${this._wlId}" d="M17,29 Q14,46 13,58"/>
-                <path id="${this._wcId}" d="M40,24 Q40,44 40,58"/>
-                <path id="${this._wrId}" d="M63,29 Q66,46 67,58"/>
-            </defs>
-        `;
+        const fill = importing ? '' : `fill: ${dotColor}; `;
+        return WIRES.map(({ top, bottom }, index) => {
+            const [from, to] = importing ? [top, bottom] : [bottom, top];
+            return svg`<circle class="dot ${dotClass}" r="3"
+                style="${fill}--from-x: ${from[0]}px; --from-y: ${from[1]}px; --to-x: ${to[0]}px; --to-y: ${to[1]}px; animation-delay: -${index * WIRE_SWEEP_MS / 4}ms"/>`;
+        });
     }
 }
