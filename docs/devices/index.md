@@ -1,6 +1,6 @@
 # Devices
 
-The **Devices** tab describes everything in the house that uses electricity, as a tree. The tree drives the flow card, the reports, the house forecast and, for schedulable devices, the automation.
+The **Devices** tab describes everything in the house that uses electricity, as a tree of [Helman devices](../concepts/devices.md). The tree drives the flow card, the reports, the house forecast and, for schedulable devices, the automation.
 
 ![Device editor](../assets/images/cfg-consumers.png){ .shot }
 
@@ -48,7 +48,7 @@ How Helman estimates what an appliance draws: [Appliances](appliances.md).
 
 ## Shared meters
 
-Several devices often hang on one meter: four air conditioners on one breaker, three lamps on a smart plug. A child **without its own meter** gets an estimate: the parent's own power, split evenly among its children that are running. Helman publishes it as `sensor.helman_share_power_<id>`, with a cumulative `sensor.helman_share_energy_<id>` whose history is back-filled once. Estimated values are marked ≈ everywhere.
+Several devices often hang on one meter: four air conditioners on one breaker, three lamps on a smart plug. A child **without its own meter**, only a switch, gets an estimate: the parent's own power, shared among the children that are on, in the ratio of each child's power as learned from history. Helman publishes it as `sensor.helman_share_power_<id>`, with a cumulative `sensor.helman_share_energy_<id>`. Estimated values are marked ≈ everywhere. How the learning works: [The Helman device](../concepts/devices.md#power-for-devices-without-a-meter).
 
 ## Every device's own detail
 

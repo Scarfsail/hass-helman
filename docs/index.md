@@ -30,9 +30,9 @@ Helman replaces those fixed rules with a plan. It knows tomorrow's solar forecas
 
     ---
 
-    One live card for solar, battery, grid and house, with the house split into a tree of devices, breakers and sockets. Consumption that no meter explains shows up as its own row.
+    One live card for solar, battery, grid and house, with the house split into a tree of devices, breakers and sockets. A light or TV with only a switch still shows its power, learned from the circuit's meter.
 
-    [:octicons-arrow-right-24: Energy flow card](using/flow-card.md)
+    [:octicons-arrow-right-24: The Helman device](concepts/devices.md)
 
 -   :material-crystal-ball: **Forecasts you can trust**
 
@@ -89,6 +89,7 @@ The **schedule editor** lets you override any slot by hand. Its *Explain automat
 | Heat the pool only when filtration runs and the sun pays for it | [Appliance runtime, condition groups](automation/condition-groups.md) |
 | Heat with air conditioning only on days with surplus, and never below 30 % battery | [Appliance runtime, self-sustainability](automation/appliance-runtime.md#self-sustainability) |
 | Know which device costs you the most, and whether it ran on sun or grid | [Device reports](using/device-reports.md) |
+| See the power of lights and appliances that have only a switch, no meter | [The Helman device](concepts/devices.md#power-for-devices-without-a-meter) |
 | Turn off a group of sockets for the night from one automation | [Groupings and actions](devices/groupings.md) |
 
 ## What you need

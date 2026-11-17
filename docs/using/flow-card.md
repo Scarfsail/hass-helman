@@ -25,4 +25,4 @@
 
 ## Why the numbers add up
 
-A device with children shows its **own meter**, which already includes the children. Helman does not sum children into the parent; it subtracts them to compute *untracked consumption*. A device without a meter of its own, for example one of four air conditioners behind a shared breaker meter, gets an **estimated** share of that meter. It is marked as estimated wherever it appears. See [Devices](../devices/index.md#shared-meters).
+A device with children shows its **own meter**, which already includes the children. Helman does not sum children into the parent; it subtracts them to compute *untracked consumption*. A device without a meter of its own, for example one of four air conditioners behind a shared breaker meter, gets an **estimated** share of that meter, based on its learned power. It is marked as estimated wherever it appears. See [The Helman device](../concepts/devices.md#power-for-devices-without-a-meter).

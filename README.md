@@ -32,6 +32,8 @@ Helman replaces fixed rules with a plan built from tomorrow's forecast, your tar
 
 **See where every watt goes.** Live solar, battery, grid and house power, with the house broken down into a tree of devices, breakers and sockets. The consumption no meter explains has its own row.
 
+**Power for devices without a meter.** Helman bundles a device's switch, meter and power sensor into one *Helman device*. A light or TV with only a switch, sitting on a metered circuit, gets its own power, energy, runs and cost: Helman learns each device's draw from the circuit's history.
+
 </td>
 <td width="50%" valign="top">
 
