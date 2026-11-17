@@ -76,6 +76,7 @@ nav:
       - Supporting entities: supporting-entities.md
   - Concepts:
       - concepts/index.md
+      - The Helman device: concepts/devices.md
       - Forecasts: concepts/forecasts.md
       - The schedule: concepts/schedule.md
       - Day types: concepts/day-types.md

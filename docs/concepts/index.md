@@ -19,7 +19,9 @@ flowchart LR
 
 The loop re-plans at every slot boundary (`:00`, `:15`, `:30`, `:45`) and whenever you edit the schedule, so the plan always rests on the latest forecast.
 
-## Five terms
+## Six terms
+
+**Helman device.** One appliance, circuit or socket, with everything Helman knows about it bundled together: its meter, power sensor, switch, place in the tree and groups. Devices are the building blocks of every card, report and plan, and a device without a meter still gets a learned power estimate. → [The Helman device](devices.md)
 
 **Slot.** 15 minutes. Every forecast, plan and action is aligned to slots.
 
