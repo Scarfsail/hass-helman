@@ -88,6 +88,12 @@
       "selected_slot": "Selected slot: {slot}",
       "correction_impact": "Correction impact",
       "factor": "Factor",
+      "legend": {
+        "solar": "Solar",
+        "house": "House",
+        "battery": "Battery",
+        "correction": "Correction"
+      },
       "no_explainability": "This profile predates stored explainability. Run training again to see contribution rows.",
       "no_slot_explainability": "No training explainability is available for {slot}.",
       "training_contribution": "Training contribution",
@@ -98,13 +104,20 @@
       "actual_wh": "Actual Wh",
       "ratio": "Ratio",
       "status": "Status",
+      "interpolated_label": "Interpolated",
+      "untrained_label": "No correction",
+      "interpolated_explanation": "This slot did not have enough valid days for its own factor. The value is interpolated linearly from the neighbouring healthy slots.",
+      "interpolated_from": "Interpolated from {left} → {right}",
+      "interpolated_meta": "The factor value is interpolated linearly from its neighbours ({left} → {right}).",
+      "interpolated_anchor_zero": "0",
       "contribution_status": {
         "included": "Included",
         "trimmed": "Trimmed",
         "invalidated": "Invalidated",
         "forecast_zero": "Zero forecast",
         "dropped_day": "Dropped day",
-        "omitted_slot": "Omitted slot"
+        "omitted_slot": "Omitted slot",
+        "interpolated": "Interpolated"
       },
       "merged": {
         "solar": "Solar production",
@@ -829,6 +842,10 @@
     }
   },
   "scheduling": {
+    "empty": "Schedule is not available.",
+    "execution": {
+      "toggle": "Execute actions"
+    },
     "day": {
       "today": "Today",
       "tomorrow": "Tomorrow",
@@ -840,6 +857,9 @@
       "hours_12": "12 h",
       "hours_24": "24 h",
       "pan_hint": "Drag the axis, right-drag or use two fingers to move the window"
+    },
+    "badge": {
+      "now": "Now"
     },
     "explanation": {
       "pipeline": {
@@ -853,22 +873,281 @@
         "unavailable": "provisional; no drill-down data",
         "current": "selected optimizer runs here"
       },
+      "loading": "Loading the evaluation…",
+      "error": "Could not load the evaluation.",
+      "empty": "No evaluation is recorded for this lane on this day.",
+      "no_slot": "Pick a slot in the lane to see its evaluation.",
+      "outcome": {
+        "wrote": "written",
+        "overwritten": "overwritten later",
+        "candidate": "candidate",
+        "not_eligible": "conditions not met",
+        "blocked": "owned by user",
+        "absent": "not considered",
+        "step_skipped": "step did not run"
+      },
+      "state": {
+        "true": "met",
+        "false": "not met",
+        "not_evaluated": "not evaluated",
+        "not_applicable": "not set"
+      },
+      "matrix": {
+        "title": "Slot conditions",
+        "empty": "The optimizer has no record for this slot.",
+        "group": "Group",
+        "no_conditions": "This group has no conditions set.",
+        "custom": "Custom conditions",
+        "gates": "Other decisions",
+        "configured": "configured",
+        "actual": "measured"
+      },
+      "diagram": {
+        "title": "Decision logic",
+        "empty": "The optimizer has no record for this slot.",
+        "matched_group": "Decided by group:",
+        "context": "Context – evaluated, but it did not change the result",
+        "unexplained": "The reason is not in the record",
+        "override": "Forced run",
+        "override_hint": "runs although conditions are not met",
+        "override_detail": "Once the limit of consecutive skipped days is exceeded, the run is forced regardless of the group conditions and the custom conditions.",
+        "stage": {
+          "conditions": "Conditions of each group",
+          "any_group": "at least one group",
+          "any_group_or_forced": "a group or forced",
+          "gates": "Other decisions",
+          "plan": "Plan decision",
+          "recheck": "Check before running",
+          "custom_when": "checked again right before running",
+          "custom_none": "no custom conditions",
+          "custom_other_group": "another group has them; this slot did not fall under it",
+          "result": "Result"
+        },
+        "trace": {
+          "title": "Custom conditions",
+          "open_hint": "click to see the last evaluation",
+          "run_at": "Evaluated",
+          "loading": "Loading the evaluation…",
+          "empty": "No evaluation has been recorded for this group yet.",
+          "error": "Could not load the evaluation",
+          "unrendered": "Home Assistant's trace components could not be loaded; the raw record is below.",
+          "close": "Close"
+        },
+        "plan_decided_when": "decided at planning time",
+        "plan_when": "evaluated at planning time",
+        "verdict": {
+          "planned": "Plan",
+          "not_planned": "Don't run"
+        },
+        "legend_stages": "Left of the dashed line is the decision whether to plan the slot at all – it is final and does not change. On the right are the custom conditions: they held at planning time and are checked again right before running, so the result can still change.",
+        "legend_no_custom": "Custom conditions belong to a group. The group this slot fell under has none, so nothing is re-evaluated before running – the result is final.",
+        "legend_decisive": "Solid line at full brightness = the branch that decided the result.",
+        "legend_dimmed": "A dimmed dashed branch was evaluated but did not change the result.",
+        "legend_comparison": "A condition shows the measured value, the comparison and the configured limit; for a met condition the measured value is not recorded, only the limit remains.",
+        "legend_and": "everything leading into it must hold",
+        "legend_or": "one group holding is enough",
+        "legend_override": "A forced run replaces meeting the conditions – that is why it leads into the same “≥1” as the groups.",
+        "legend_not_applicable": "Dotted and “–” = a condition the group does not set; it does not enter the evaluation.",
+        "legend_params": "Numbers in the blocks read reached/needed (for a rank, position/total); the full breakdown is in the tooltip on hover.",
+        "legend_params_source": "The tag on a group says where its parameters come from; “!” means they do not come directly from this slot.",
+        "terminal": {
+          "execute": "run",
+          "candidate": "candidate – waiting for conditions",
+          "not_eligible": "don't run",
+          "blocked": "blocked by user"
+        },
+        "edit_automation": "Edit automation",
+        "edit": {
+          "title": "Edit automation",
+          "loading": "Loading the config…",
+          "load_failed": "Could not load the config",
+          "not_found": "Optimizer “{id}” is not in the stored config. It may have been renamed or deleted since this plan was built.",
+          "close": "Close",
+          "cancel": "Cancel",
+          "discard": "Discard unsaved changes?"
+        }
+      },
+      "params_source": {
+        "slot_matched": "by slot",
+        "day_resolved": "by day",
+        "master_fallback": "main settings"
+      },
+      "params_source_detail": {
+        "slot_matched": "Parameters of the group that matches this slot.",
+        "day_resolved": "Parameters are resolved once per day, so they can come from a different group than the one matching this slot.",
+        "master_fallback": "No group matched this day, so the main settings were used."
+      },
+      "param": {
+        "min_export_price": "Minimum export price",
+        "max_price": "Maximum price",
+        "max_run_price": "Maximum run price",
+        "min_soc_pct": "Minimum SoC",
+        "target_soc_pct": "Target SoC",
+        "reserve_floor_soc_pct": "SoC reserve",
+        "min_runtime_minutes": "Minimum runtime",
+        "daily_minimum_minutes": "Daily minimum",
+        "max_slots": "Maximum slots",
+        "rank": "rank",
+        "rank_of": "of",
+        "rankOf": "out of",
+        "cost": "slot price",
+        "worstChosenCost": "dearest chosen slot",
+        "start": "start",
+        "end": "end",
+        "minHours": "daily minimum (h)",
+        "doneHours": "already run (h)",
+        "remainingHours": "remaining (h)",
+        "slotsNeeded": "slots needed",
+        "slotsPlaceable": "placeable slots",
+        "slotsAvailable": "available slots",
+        "windowSlots": "slots in window",
+        "consecutiveSkips": "consecutive skipped days",
+        "maxConsecutiveSkips": "skipped days limit",
+        "neededKwh": "needed (kWh)",
+        "marginPct": "margin (%)",
+        "surplusAtWindowStart": "surplus at window start (kWh)",
+        "releaseSlot": "release",
+        "boundBy": "bound by",
+        "matchedGroup": "matched group",
+        "classification": "day type",
+        "solarToConsumptionRatio": "production to consumption ratio",
+        "denominatorOptimizerId": "day type computed for",
+        "conditionValue": "configured value",
+        "failingCondition": "failing condition",
+        "floor": "SoC floor (%)",
+        "projectedMinSoc": "projected minimum SoC (%)",
+        "baselineMinSoc": "minimum SoC without the appliance (%)",
+        "atSlot": "when",
+        "deltaSocPct": "end-of-day SoC difference (%)",
+        "deltaImportKwh": "extra grid import (kWh)",
+        "tolerancePct": "daily tolerance (% of capacity)",
+        "budgetKwh": "daily tolerance (kWh)",
+        "spentKwh": "spent beyond the sun (kWh)",
+        "source": "based on",
+        "chargers": "charging chargers",
+        "inGrace": "charging only within grace"
+      },
+      "status": {
+        "skipped": "Skipped",
+        "failed": "Failed"
+      },
+      "status_reason": {
+        "condition_rails_unavailable": "conditions could not be evaluated",
+        "battery_params_missing": "battery parameters are missing",
+        "soc_forecast_unavailable": "SoC forecast is missing",
+        "stop_export_unsupported": "the inverter cannot stop export"
+      },
+      "optimizer": {
+        "charge_hold": "Charge hold",
+        "battery_reserve": "Battery reserve",
+        "battery_hold_while_ev_charging": "Battery hold while EV charges",
+        "export_price": "Stop export",
+        "appliance_runtime": "Appliance runtime"
+      },
+      "action": {
+        "charge_hold": "hold",
+        "battery_reserve": "charge",
+        "battery_hold_while_ev_charging": "hold battery",
+        "export_price": "stop export",
+        "appliance_runtime": "turn on"
+      },
       "condition": {
+        "run_when": "Run when",
+        "requires_appliance": "Requires appliance",
+        "when_price_below": "Price below limit",
+        "max_run_price": "Maximum run price",
+        "min_soc_pct": "Minimum SoC",
+        "min_solar_coverage_pct": "Minimum solar coverage",
         "reserve_hold": "Reserve hold",
         "above_min_soc": "Above min SoC",
         "when_solar_below_w": "Solar below limit",
+        "ensure_self_sustainability": "Self-sustainability",
+        "reserve_floor_soc": "SoC reserve for the expensive band",
+        "run_window": "Run window",
+        "hold_window": "Hold window",
+        "hold_room": "Room to hold",
+        "day_context": "Day context",
+        "day_group_matched": "Group for this day",
+        "daily_minimum_remaining": "Daily minimum",
+        "placement_capacity": "Placement capacity",
+        "consecutive_skip_override": "Consecutive skip override",
+        "slot_available": "Free slot",
+        "cheapest_rank": "Price rank",
+        "cheap_window_capacity": "Cheap window capacity",
+        "charge_needed": "Charge needed",
+        "cheap_window_floor": "Reserve in the cheap window",
+        "window_soc_known": "SoC known in window",
+        "stop_export_supported": "Stop export supported",
+        "blocked_user_owned": "Slot without a manual plan",
         "ev_charging": "EV charging"
       },
       "condition_detail": {
+        "blocked_user_owned": "Automation writes only into slots the user has not set. Met = the slot is not taken by a user plan and is free for automation; not met = the user owns the slot and automation will not write into it.",
+        "cheap_window_floor": "The SoC reserve also applies in the cheap window before an expensive band: from the first slot the battery enters below the reserve, it is charged back to it and held there (discharging stopped) for the rest of the cheap window.",
+        "slot_available": "A slot the optimizer can work with at all — slots set by the user are removed before selection, so nothing is planned into them.",
+        "daily_minimum_remaining": "How many hours of the daily minimum are left behind this slot: what the appliance has already run today according to measured history plus what the plan has scheduled before this slot. The decision itself was made once for the whole day — the gate says the day still owed some hours, and the number of slots was chosen from that.",
+        "cheapest_rank": "How cheap this slot ranks among the slots decided for this day. This is the per-slot number that says why this slot in particular is planned. For charge hold it is the other way round: met = the slot did not make the ranking, cheaper slots already cover the need and the surplus here is better sold.",
+        "ensure_self_sustainability": "What running the appliance does to the battery: the horizon is recomputed with this slot added and compared against the course without the appliance. The configured number is the daily tolerance for energy the sun did not provide — a drained battery and grid import add up. 0 means the day must pay for itself, 100 switches the tolerance off and only the SoC floor is guarded. It is evaluated in price order, so the result also depends on which slots were accepted before this one.",
         "reserve_hold": "Stops discharging when the cheap-window plan still leaves the battery below its required minimum; imports instead to preserve the outage reserve.",
         "above_min_soc": "Whether the forecast battery SoC entering this slot is at or above the configured min SoC. True = the slot may be held; false = the battery enters it below the min SoC, so it charges regardless of price.",
         "ev_charging": "Whether a selected charger charges in this slot: the plan for future slots, the charger's real draw (above 1 kW, with the sensor grace period) for the current one."
+      },
+      "self_sustainability": {
+        "would_break_soc_floor": "With this slot the battery would drop below the configured floor",
+        "soc_floor_already_breached": "The battery drops below the floor even without the appliance, so nothing more is added — this appliance is not the cause",
+        "over_battery_budget": "With this slot the day would spend more energy beyond the sun than the daily tolerance allows — both a battery ending the day lower and extra grid import count"
       }
     },
     "forecast": {
+      "battery_label": "Battery",
       "solar_label": "Solar",
+      "grid_label": "Grid",
+      "price_label": "Export price",
+      "net": "Net",
+      "import": "Import",
+      "export": "Export",
+      "surplus": "Surplus",
       "measured": "measured",
       "expected": "expected"
+    },
+    "dialog": {
+      "title": {},
+      "action": "Action",
+      "inverter": "Inverter",
+      "appliances": "Appliances",
+      "tabs": "Schedule editor tabs",
+      "tab": {
+        "configured": "Action is set",
+        "not_configured": "No action set"
+      },
+      "appliance": {
+        "no_action": "No action",
+        "turn_on": "Turn on",
+        "turn_off": "Turn off",
+        "no_charge": "Don't charge",
+        "charge": "Charge",
+        "vehicle": "Vehicle",
+        "mode": "Mode",
+        "eco_gear": "ECO gear",
+        "unsupported_authoring": "Scheduling this kind of appliance is not available yet."
+      },
+      "appliance_kind": {
+        "ev_charger": "EV charger",
+        "generic": "Generic appliance",
+        "climate": "Climate"
+      },
+      "target_soc": "Target SoC",
+      "cancel": "Cancel",
+      "apply": "Apply changes"
+    },
+    "copy": {},
+    "error": {
+      "not_configured": "Scheduling is not configured correctly.",
+      "unknown": "Could not load or edit the schedule."
+    },
+    "running": {
+      "label": "Running",
+      "unavailable": "unavailable"
     },
     "action": {
       "empty": "No action",
@@ -886,8 +1165,72 @@
       "manual_run": "Started manually — left running until the next planned slot",
       "manual_mode": "Set by hand — kept until Helman's next planned window"
     },
+    "runtime": {
+      "applied": "Applied",
+      "error": "Runtime error"
+    },
+    "metric": {
+      "surplus": "Surplus",
+      "soc": "Battery SoC",
+      "import": "Grid import",
+      "export": "Grid export"
+    },
+    "authorship": {
+      "user": "user",
+      "automation": "automation",
+      "mixed": "Mixed authorship",
+      "set_by_user": "Set by user",
+      "set_by_automation": "Set by automation"
+    },
+    "automation_coverage": {
+      "active": "Driven by automation — click to edit it",
+      "disabled_only": "An automation exists but is not running — click to view it",
+      "active_readonly": "Driven by automation",
+      "disabled_only_readonly": "An automation exists but is not running",
+      "none": "No automation — manual scheduling only"
+    },
+    "why": {
+      "title": "Why?",
+      "no_change": "This run did not change the value."
+    },
+    "actions": {},
+    "now": {
+      "title": "Now",
+      "unavailable": "The current slot is not available.",
+      "scheduled": "Scheduled",
+      "running": "Running",
+      "reason": "Reason",
+      "actor": {
+        "inverter": "Inverter"
+      },
+      "actual": {
+        "applied": "Applied",
+        "failed": "Failed",
+        "no_change": "No change",
+        "stopped": "Stopped"
+      },
+      "detail": {
+        "expected": "Expected"
+      }
+    },
     "appliance": {
+      "action": {
+        "generic": "Scheduled"
+      },
+      "generic": {
+        "action": {
+          "on": "Turn on",
+          "off": "Turn off"
+        },
+        "projected_energy": "Projected energy",
+        "projection_method": {
+          "fixed": "Fixed",
+          "history_average": "History average",
+          "fixed_fallback": "Fixed fallback"
+        }
+      },
       "climate": {
+        "projected_energy": "Projected climate energy",
         "mode": {
           "off": "Off",
           "heat": "Heat",
@@ -895,10 +1238,14 @@
         }
       },
       "ev": {
+        "action": {
+          "no_charge": "Don't charge"
+        },
         "mode": {
           "fast": "Fast",
           "eco": "ECO"
-        }
+        },
+        "expected_soc": "Expected vehicle SoC"
       }
     },
     "entity_editor": {
