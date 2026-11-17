@@ -17,7 +17,7 @@ telemetry — are out of scope; install the integration and point the config at 
 > signed grid power sensors it already reads (§3), so there is nothing to build
 > ([issue #71](https://github.com/Scarfsail/hass-helman/issues/71)).
 
-> Not needed with the SolaX inverter profile: the house energy helpers (§1.2 `sensor.house_load_total`, §1.3 `sensor.solax_today_house_load`), the battery SoC bound templates (§2), and the inverter mode selector with its automation (§4). The profile reads the SolaX entities they were built from directly, and drives the inverter through Helman's own `select.helman_inverter_mode`. See [Hardware profiles](../README.md#hardware-profiles).
+> Not needed with the SolaX inverter profile: the house energy helpers (§1.2 `sensor.house_load_total`, §1.3 `sensor.solax_today_house_load`), the battery SoC bound templates (§2), and the inverter mode selector with its automation (§4). The profile reads the SolaX entities they were built from directly, and drives the inverter through Helman's own `select.helman_inverter_mode`. See [Hardware profiles](devices/hardware-profiles.md).
 
 ## About the examples
 
@@ -381,7 +381,7 @@ active.
 
 ### `switch.ev_nabijeni`
 
-> Not needed with the SolaX EV charger profile; `switch.helman_ev_charging_<device id>` replaces it. Helman creates that switch for a charger whose `profile` is `{id: solax_ev_charger, device_id: <HA device id>}` and points its `controls.charge` at it. It is on while `sensor.solax_ev_charger_run_mode` reads `Charging`; turning it on selects `Start Charging` on `select.solax_ev_charger_control_command`, turning it off selects `Stop Charging` and then sets the use mode back to `ECO`, and a command the select already shows is sent a second time. The profile also provides the use mode and eco gear selects with their values and the charger's meters. Re-point any automation that toggles `switch.ev_nabijeni` at the new switch. See [Hardware profiles](../README.md#hardware-profiles).
+> Not needed with the SolaX EV charger profile; `switch.helman_ev_charging_<device id>` replaces it. Helman creates that switch for a charger whose `profile` is `{id: solax_ev_charger, device_id: <HA device id>}` and points its `controls.charge` at it. It is on while `sensor.solax_ev_charger_run_mode` reads `Charging`; turning it on selects `Start Charging` on `select.solax_ev_charger_control_command`, turning it off selects `Stop Charging` and then sets the use mode back to `ECO`, and a command the select already shows is sent a second time. The profile also provides the use mode and eco gear selects with their values and the charger's meters. Re-point any automation that toggles `switch.ev_nabijeni` at the new switch. See [Hardware profiles](devices/hardware-profiles.md).
 
 **Purpose.** The on/off control helman actuates to start and stop EV charging. The appliance layer
 only needs something switchable — Solax exposes charging as a *mode select*, not a switch, so the

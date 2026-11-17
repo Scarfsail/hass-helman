@@ -1,0 +1,117 @@
+site_name: Helman
+site_description: House electricity manager for Home Assistant — forecasts, a 48-hour plan and automatic control of your battery, inverter and appliances.
+site_url: https://scarfsail.github.io/hass-helman/
+repo_url: https://github.com/Scarfsail/hass-helman
+repo_name: Scarfsail/hass-helman
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+validation:
+  anchors: warn
+  unrecognized_links: warn
+
+exclude_docs: |
+  reviews/
+  node-detail-contract.md
+
+theme:
+  name: material
+  logo: assets/emblem.png
+  favicon: assets/favicon.png
+  palette:
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+  features:
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - navigation.instant
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+
+extra_css:
+  - assets/extra.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - def_list
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - getting-started/index.md
+      - Install: getting-started/install.md
+      - First setup: getting-started/first-setup.md
+      - Supporting entities: supporting-entities.md
+  - Concepts:
+      - concepts/index.md
+      - Forecasts: concepts/forecasts.md
+      - The schedule: concepts/schedule.md
+      - Day types: concepts/day-types.md
+  - Everyday use:
+      - using/index.md
+      - Energy flow card: using/flow-card.md
+      - Node details: using/node-details.md
+      - Inspector: using/inspector.md
+      - Editing the schedule: using/schedule-editor.md
+      - Device reports: using/device-reports.md
+      - Other cards: using/other-cards.md
+  - Automation:
+      - automation/index.md
+      - Condition groups: automation/condition-groups.md
+      - Charge hold: automation/charge-hold.md
+      - Battery reserve: automation/battery-reserve.md
+      - Export price: automation/export-price.md
+      - Battery hold while EV charges: automation/ev-battery-hold.md
+      - Appliance runtime: automation/appliance-runtime.md
+      - Recipes: automation/recipes.md
+  - Devices:
+      - devices/index.md
+      - Appliances: devices/appliances.md
+      - EV charger: devices/ev-charger.md
+      - Groupings and phases: devices/groupings.md
+      - Hardware profiles: devices/hardware-profiles.md
+  - Data and learning:
+      - learning/index.md
+  - Reference:
+      - reference/index.md
+      - Card options: reference/cards.md
+      - Entities: reference/entities.md
+      - Actions: reference/actions.md
+      - Background jobs: reference/background-jobs.md
+      - Troubleshooting: reference/troubleshooting.md
+      - Development: reference/development.md
+      - "Deep dive: how a run plans": automation.md
+      - "Deep dive: learned device energy": device-energy.md
+      - "Deep dive: device reports": device-reports.md
