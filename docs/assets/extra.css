@@ -1,0 +1,67 @@
+/* Colours taken from the logo: cyan, lime, yellow on deep navy. */
+:root {
+  --md-primary-fg-color: #0b6e8a;
+  --md-primary-fg-color--light: #1aa3c4;
+  --md-primary-fg-color--dark: #07475a;
+  --md-accent-fg-color: #8ccf2f;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: #0d2236;
+  --md-primary-fg-color--light: #163450;
+  --md-primary-fg-color--dark: #08172a;
+  --md-accent-fg-color: #b8e83a;
+  --md-default-bg-color: #0f1720;
+  --md-typeset-a-color: #43d1e8;
+}
+
+/* Screenshots: framed, never wider than the column. */
+.md-typeset img.shot {
+  border-radius: 10px;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.35);
+  max-width: 100%;
+  height: auto;
+}
+
+.md-typeset img.shot--narrow {
+  max-width: 420px;
+}
+
+/* Two screenshots side by side, stacking on a phone. */
+.md-typeset .shots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+/* Markdown wraps the images in one paragraph; let them be the grid items. */
+.md-typeset .shots > p {
+  display: contents;
+}
+
+.md-typeset .hero {
+  text-align: center;
+  margin: 0 0 1.5rem;
+}
+
+.md-typeset .hero img {
+  width: 240px;
+  max-width: 60%;
+  border-radius: 18px;
+}
+
+/* The home page's title is the logo; keep the h1 for search and screen readers. */
+.md-typeset h1.hero-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.md-typeset .hero p {
+  font-size: 1.15rem;
+  margin: 0.5rem auto 0;
+  max-width: 40rem;
+}

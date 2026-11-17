@@ -1,474 +1,88 @@
-# Helman Energy
-
-A Home Assistant custom integration for household electricity management: consumption/production
-forecasting, battery capacity forecasting, solar bias correction, manual scheduling, and a bundled
-Lovelace card to visualize and control power flows.
-
-The integration ships its own Lovelace card and config-editor panel — installing the integration is
-enough; the card's Lovelace resource is registered automatically, no manual resource step needed.
-
-## Installation
-
-### HACS (custom repository)
-1. In Home Assistant, open HACS → Integrations → ⋮ menu → Custom repositories.
-2. Add this repository URL, category **Integration**.
-3. Install "Helman Energy", then restart Home Assistant.
-4. Add the integration via **Settings → Devices & Services → Add Integration → Helman Energy**.
-5. The `custom:helman-card` Lovelace resource is registered automatically (UI/storage-mode dashboards
-   only — YAML-mode dashboards are not auto-registered).
-
-### Migrating from `hass-helman-card`
-The card used to be a separate HACS repository (`hass-helman-card`, category Lovelace). It has been
-merged into this integration and that repository is now archived.
-
-If you previously installed the card separately:
-1. Remove the old `hass-helman-card` entry from HACS (Integrations → Lovelace list).
-2. Remove any manually-added Lovelace resource pointing at
-   `/hacsfiles/hass-helman-card/...` (Settings → Dashboards → Resources) — otherwise the card is
-   registered twice.
-3. Install/update this integration as described above. The card element name
-   (`custom:helman-card`) is unchanged, so existing dashboard YAML keeps working.
-
-## Supporting entities
-
-Helman reads and writes plain Home Assistant entities; it never talks to hardware itself. Your
-inverter integration supplies most of them, but a few have to be built by hand — house load and its
-energy integral, battery SOC bounds, signed grid power, the mode selector the battery schedule is
-executed through, and an EV charging switch.
-
-See [docs/supporting-entities.md](docs/supporting-entities.md) for what each one is for, where in the
-config and code it is consumed, and a ready-to-adapt Solax example.
-
-## Hardware profiles
-
-A hardware profile describes one piece of hardware, and you pick it on the device it describes: one per device, chosen in the config editor as the first field of that device's **Identity** section. With a profile, Helman finds the device's entities itself, in the entity registry of the vendor integration, by the domain and unique id that integration registers each under, within the config entry or HA device the profile is bound to. Renaming an entity doesn't break it, and the fields the profile provides are shown read-only in the editor, each with the entity it resolved to.
-
-Profiles are defined in Helman's code, never in your config: supporting another vendor or model is a code change. Site facts stay yours to set whatever the hardware is, such as maximum power, prices, efficiencies and the solar forecast. A device without a profile ("Custom") keeps every entity picked by hand, exactly as before. A profile is stored as the device's `profile` key, `{id: <profile id>, …}`; there is no `custom` id, Custom is the absence of the key. Config version 29 renamed the key from `vendor: {profile: …}`: a stored config is migrated on load, and a `vendor` key is refused on save.
-
-Available today:
-
-- **SolaX inverter** (`solax_modbus`, built against the X3-Hybrid), on the inverter (`energy_nodes.inverter`). It provides the solar, battery, grid and house power and energy entities, the battery SoC bounds (the Self Use discharge floor and the charge ceiling), the house consumption total the forecast trains on, and the solar total the bias correction trains on. It also fixes the power polarity of all four power nodes (`positive_is_production` for solar, `positive_is_consumption` for house, `positive_is_discharging` for battery, `positive_is_import` for grid), shown read-only in the editor. It also drives the inverter: Helman creates `select.helman_inverter_mode`, with one option per schedule action, and points the inverter's mode control at it. Selecting an option, whether the schedule or you do it, writes the SolaX use mode (and in Manual Mode the manual mode), then the export limit: `0` for stop export, otherwise your grid contract's export cap, `energy_nodes.grid.max_allowed_export_power`, which the profile requires. In the stored config it is `energy_nodes.inverter.profile: {id: solax_inverter, entry_id: <solax_modbus config entry id>}`. Picking it in the editor removes the entities it provides from your config, and the save refuses a config that still sets one of them (`vendor_owned_key`). An entity the integration doesn't have is reported (`vendor_entity_unresolved`) and leaves its slot unset.
-- **SolaX EV charger** (`solax_modbus`), on an `ev_charger` device, bound to the charger's HA device rather than to a config entry. It provides the charger's energy and power meters (`consumption.energy_entity_id`, `consumption.power_entity_id`), the use mode select with its values (`Fast` charges at full power, `ECO` follows the surplus) and the eco gear select with its values (`6A` at 3.5 kW, `10A` at 6.9 kW). It also drives the charger: Helman creates `switch.helman_ev_charging_<device id>`, named after the device, and points the device's `controls.charge` at it. The switch is on while the charger's run mode reads `Charging`; turning it on selects `Start Charging` on the charger's control command, turning it off selects `Stop Charging` and then sets the use mode back to `ECO`, and a command the control command select already shows is sent a second time. In the stored config it is `profile: {id: solax_ev_charger, device_id: <HA device id>}` on the device; its `id`, `name`, `icon`, `limits`, `vehicles`, groups and `schedulable` stay yours. In the editor, pick it first in the device's **Identity** section and then its HA device; only the HA devices it fully resolves on are offered, and **Add device** can create a charger from one directly. Its provided fields, the use modes and eco gears included, are then shown read-only. Two devices bound to one HA device are refused (`duplicate_profile_device`).
-
-## Cards
-
-### `custom:helman-card`
-Visualizes real-time power for sources (solar, battery, grid) and consumers (house, devices), with
-animated flow indicators and compact history bars. Can group house devices by Home Assistant Labels
-and surface custom label badges per device.
-
-- Live power and per-bucket history bars (configurable buckets and duration)
-- Sources vs Consumers layout with animated flow arrows scaled by the largest solar, battery or grid max power
-- House device tree built from `devices.consumers` (with an "👻 Untracked consumption" remainder row under every measured device with children); a meterless child shows under its parent with an estimated `sensor.helman_share_power_<id>` — the parent's own power split evenly among its running meterless children — and `sensor.helman_share_energy_<id>`, a `total_increasing` kWh sensor accumulating that share, its history back-filled once from the share-power sensor's hourly means; on upgrade to config version 21 the Energy dashboard's individual devices are imported into `devices` once, and Energy preferences are not read after that; on upgrade to config version 23 each metered device missing a power sensor or switch gains them from the HA device owning its meter (the top-ranked power sensor; a switch only when it carries the power-switch label or is named like the HA device)
-- Optional house consumption forecast in the node detail dialogs
-- Entity disambiguation via HA Labels for power sensor and power switch suggestions
-- Group devices by label categories (e.g., Location, Type) with emojis/text
-- Optional aggregate info for Solar (today + forecast), Grid (import/export), and Battery
-  (charge/empty ETA)
-
-#### Quick start
-```yaml
-type: custom:helman-card
-energy_nodes:
-  house:
-    entities:
-      power: sensor.house_power
-  grid:
-    entities:
-      power: sensor.grid_power
-  solar:
-    entities:
-      power: sensor.solar_power
-  battery:
-    entities:
-      power: sensor.battery_power
-```
-
-#### Configuration reference
-
-Top-level schema is `HelmanCardConfig`. Only `energy_nodes` is required; everything else is optional.
-
-**Top-level options**
-- `type`: string — Must be `custom:helman-card`.
-- `show_empty_groups`: boolean — While a "Group by" filter is active, also list the groups with no devices. Default: `false`.
-- `show_others_group`: boolean — While a "Group by" filter is active, list the devices outside every group under "Others". Default: `true`.
-
-Each card carries its own group options, so two cards can show the same devices differently:
-
-```yaml
-- type: custom:helman-card
-- type: custom:helman-card
-  show_empty_groups: true
-  show_others_group: false
-```
-
-**Breaking change (config version 32):** `show_empty_groups` and `show_others_group` used to be Helman config keys under `visualization`. The upgrade discards the stored values and does not touch your dashboards: set any non-default value again on each card. The save refuses the old keys.
-
-Config version 27 dropped the panel texts and the energy node display names, which the card now localizes; a stored config is migrated on load and the old keys are refused on save.
-
-**`data_and_learning`**
-The Helman config section edited on the config editor's Data and learning tab: when training runs (`training_time`), the house consumption and solar bias training settings (`house_consumption`, `solar_bias`) and the recent power history (`recent_power_history`). Config version 32 renamed it from `training` and moved the recent power history here from `visualization`, which it retired; a stored config is migrated on load and the old keys are refused on save.
-
-```yaml
-data_and_learning:
-  training_time: "03:00"
-  house_consumption:
-    min_history_days: 14
-    training_window_days: 56
-  solar_bias:
-    min_history_days: 10
-    max_training_window_days: 90
-  recent_power_history:
-    sampling_interval_seconds: 5
-    samples: 60
-```
-
-- `recent_power_history.sampling_interval_seconds`: number — How often, in seconds, Helman takes a power reading for the in-memory recent power history; it also paces the derived power values (unmeasured consumption, shared power estimates). Unmeasured power is smoothed with a median over a fixed 15 s window, so an interval above 10 s disables that smoothing. Default: 5.
-- `recent_power_history.samples`: number — How many readings the recent power history keeps. The Helman card draws each row's inline power bars from it, and the battery time-to-full and time-to-empty estimates average over it. Default: 60, which at the default interval is the last 5 minutes. It is not Home Assistant's recorded history.
-
-The editor shows these defaults as placeholders while their keys are absent. On save, values matching the current defaults are omitted so they follow future defaults; explicit differing values remain overrides. Opening or restarting a current config does not add omitted values.
-
-**`energy_nodes`**
-Defines the battery inverter and the entities for the four power endpoints. At least `house.entities.power` should be provided to
-build the consumer tree around the house. Config version 24 renamed the key from `power_devices`; a stored config is migrated on load.
-
-- `energy_nodes.inverter`: object — The battery inverter Helman drives, at most one, configured first in the editor's Energy nodes tab because its hardware profile fills in the nodes below. It holds `controls.mode` (the mode select and its `options`, one per schedule action) and `profile` (the hardware profile) only: no `id`, `kind` or `name`, since its location implies them. Schedules, optimizer targets (`target.controllable_id: inverter`) and `select.helman_inverter_mode` still name it by the reserved id `inverter`, which no device may take. Config version 28 moved it here from `devices.system`; a stored config is migrated on load (dropping `id`, `kind` and `name`), and a `devices.system` key is refused on save.
-
-- `energy_nodes.house`: `entities.power`, `entities.today_energy`.
-  House consumption forecast uses a separate config surface — see "House consumption forecast" below.
-- `energy_nodes.grid`: `entities.power` (positive export, negative import),
-  `entities.today_export`, `entities.today_import`. Solar bias correction reads the signed power
-  sensor too, to tell a clipped slot from an exporting one.
-- `energy_nodes.battery`: `entities.power`, `entities.capacity` (% SoC), `entities.min_soc`,
-  `entities.max_soc`, `entities.remaining_energy` (Wh). When enough fields are present and current
-  power is significant, the card shows target SoC, ETA time, and wall clock time.
-- `energy_nodes.solar`: `entities.power`, `entities.today_energy`. The "remaining today" figure
-  next to it on the card is Helman's own bias-corrected
-  `sensor.helman_solar_forecast_today_remaining` and is not configurable.
-
-**`devices`**
-The devices and the settings that apply to every device. Since config version 22 `devices` is an object; the tree used to be a bare `devices:` list, and `name_cleaner_regex` and the two labels used to live under `visualization` and `power_devices.house`. Since config version 25 the single `items` list is split in two, and since version 28 the inverter half lives at `energy_nodes.inverter`, leaving `devices` to the consumers. A stored config is migrated on load.
-- `consumers`: list — The devices that draw power, as a tree, as described under "House consumption forecast" below.
-- `groupings`: list — The ways devices are grouped (breaker boxes, rooms, modes, …), each with its groups; a consumer joins groups through its own `groups`. See "Grouping devices".
-- `name_cleaner_regex`: string — Python regular expression (`re.sub`) removed from an entity's friendly name wherever a device without a `name` is named from it: the card, the inspector, the schedulable runtimes and the Devices editor. E.g. `" - [Pp]ower$"`.
-- `power_sensor_label` / `power_switch_label`: HA Label names that rank the power sensor / switch entities suggested for a device in the Devices editor when its HA device exposes several. The card itself reads only what `devices.consumers` configures. Label names must match HA Labels exactly.
-
-All energy sensors auto-detect units from `unit_of_measurement` (Wh, kWh, MWh, GWh supported).
-
-#### Grouping devices
-Group house devices into virtual groups defined in the Helman config. Each entry of `devices.groupings` is a grouping, rendered as a chip on the card; its `groups` are the groups a device can belong to, each with a `name` and a `short_name` (an emoji or short text) that the card shows as the device's badge and after the group's title. A consumer names its group per grouping in its own `groups`, grouping id to group id, and belongs to at most one group of each grouping. The order of `groupings` and of each `groups` list is the display order.
-
-```yaml
-devices:
-  groupings:
-    - id: location
-      name: Location
-      groups:
-        - id: kitchen
-          name: Kitchen
-          short_name: "🍳"
-        - id: living_room
-          name: Living room
-          short_name: "🛋️"
-  consumers:
-    - id: dishwasher
-      groups: { location: kitchen }
-```
-
-Whether empty groups and the "Others" group are listed is set on each card (`show_empty_groups`, `show_others_group`; see the card's options above).
-
-Groupings and their groups are edited in the "Device groupings" section of the config editor's Devices tab. A device is in a group only through its own `groups` entry; a child does not take its parent's group. That entry is set in two places. In the groupings section each group lists its consumers as chips, children included, followed by an "Unassigned" area with every consumer that has no group of its own, and dragging a chip into another group or into "Unassigned" sets or removes that device's `groups` entry and nothing else. In the device editor, on the Devices tab and in the card's device dialog, a consumer's collapsed "Groups" section lists its groups and has one picker per grouping, where "None" removes the entry. The order of devices inside a group is the device tree's and is not stored. Removing a group or a grouping there also removes it from every device. Any consumer may carry `groups`, children included. On the card, a child with no group of its own stays nested under its parent, wherever the parent is filed, while a child assigned to a different group than its parent is lifted out into that group with its own subtree, and the same applies to its descendants. Its power is taken out of every ancestor it was lifted from, so in the grouped view a parent row shows its reading minus its lifted children and the group totals add up to the house devices' total; the plain view still shows the raw reading. Validation refuses a `groups` entry naming an unknown grouping or group.
-
-Before config version 26 groups came from Home Assistant labels through `visualization.device_label_text` (category → label name → badge text). The upgrade converts it once: each category becomes a grouping, each label a group with its badge text as the short name, and each device joins, per category, the group of the first label in the category's order that its HA device carries (for a child without its own meter, the HA device of its switch or climate control). HA labels are not read after that, and the old key is refused on save.
-
-#### Acting on a group from automations
-Two HA actions let automations and scripts use helman groups in place of HA labels. Both take the `grouping` id and the `group` id (ids, not names), which are shown and editable next to the names in the groupings section of the config editor; devices follow an id change there, automations using the old id do not. Both read the config on every call, so an edit in the config editor applies at once. An unknown grouping or group is an error.
-
-- `helman.get_group_entities` returns `{"entity_ids": [...], "skipped": [...]}` and must be called with a response variable.
-- `helman.group_action` runs `turn_on`, `turn_off` or `toggle` (`action`) on each of the group's entities in device tree order, waiting `delay_ms` milliseconds (default `500`) between two entities. It works whether or not schedule execution is enabled. An entity that fails is logged and the rest still run; with `continue_on_error: false` (default `true`) the action then fails naming the entities that did not respond.
-
-A group's entities are those of its **direct members**: consumers whose own `groups` entry names the group. The entity of each member is its on/off control: `controls.switch` (a switch or a light), else an EV charger's `charge` switch, else `controls.climate`. A member with none of these is listed in `skipped` and logged as a warning; it is never silently left out. The inverter is never included.
-
-The night/away automation, with the device lists kept in helman instead of HA labels:
-
-```yaml
-actions:
-  - action: helman.group_action
-    data:
-      grouping: rezimy
-      group: elektrina_vypnout_na_noc
-      action: turn_off
-```
-
-When each entity needs its own handling, list them and loop:
-
-```yaml
-sequence:
-  - action: helman.get_group_entities
-    data:
-      grouping: rezimy
-      group: elektrina_vypnout_pryc
-    response_variable: group
-  - repeat:
-      for_each: "{{ group.entity_ids }}"
-      sequence:
-        - action: homeassistant.turn_off
-          target:
-            entity_id: "{{ repeat.item }}"
-        - delay:
-            milliseconds: 500
-```
-
-#### House consumption forecast
-Driven by the shared Helman config under `energy_nodes.house.forecast` for the entity, and under
-`data_and_learning.house_consumption` for the history windows (not a Lovelace YAML option):
-
-```yaml
-energy_nodes:
-  house:
-    forecast:
-      total_energy_entity_id: sensor.house_energy_total
-
-data_and_learning:
-  house_consumption:
-    min_history_days: 14
-    training_window_days: 42
-```
-
-- `energy_nodes.house.forecast.total_energy_entity_id`: required cumulative energy sensor used as
-  the forecast source.
-- `data_and_learning.house_consumption.min_history_days` (default 14): minimum history span (from the oldest
-  hourly statistics row) before charts can be shown.
-- `data_and_learning.house_consumption.training_window_days` (default 56): Recorder lookback window; keep ≥
-  `min_history_days`. This is the main driver of the nightly training cost — see
-  [Scheduled work](#scheduled-work).
-
-**Deferrable consumers** — the loads subtracted from the house total to leave the baseline (`house total - sum(deferrables)`) — are not listed here. They are derived from `devices`: a meter's own energy (its reading minus its sub-metered children's) is carved out of the baseline exactly when all demand behind it is schedulable — the device owning it is `schedulable: true`, or every child drawing from it without a meter of its own is.
-
-```yaml
-devices:
-  consumers:
-    - id: ev
-      kind: ev_charger
-      name: EV Charging
-      schedulable: true
-      controls: { ... }
-      consumption:
-        energy_entity_id: sensor.ev_charging_energy_total   # a non-overlapping sub-meter
-    - id: jistic_klimatizace_energy                         # a passive breaker meter...
-      consumption:
-        energy_entity_id: sensor.jistic_klimatizace_energy
-        power_entity_id: sensor.jistic_klimatizace_power
-      children:                                             # ...the devices drawing from it
-        - id: klima-obyvak
-          kind: climate
-          schedulable: true
-          controls: { climate: { entity_id: climate.obyvak } }
-          consumption: { projection: { ... } }
-```
-
-A passive device (no `schedulable`) stays inside the baseline. The inverter may not declare `consumption` at all — it moves energy rather than drawing it.
-
-For how the house-load chain feeding `total_energy_entity_id` is built, see
-[Supporting entities](docs/supporting-entities.md#1-the-house-load-chain).
-
-### `custom:helman-solar-inspector-card`
-Solar bias correction inspector, using the `helman/solar_bias/inspector` WebSocket API.
-
-```yaml
-type: custom:helman-solar-inspector-card
-transparent_background: false
-```
-
-## How planning works
-
-Helman re-plans continuously — once per 15-minute slot in normal operation — over a rolling 48-hour horizon. Each run wipes its own previous decisions and re-plans from scratch, but reads the wiped plan back as a forecast of house demand, so that an optimizer sizing the battery can see the appliance runs that are scheduled after it in the list.
-
-See [docs/automation.md](docs/automation.md) for how a run is built, why the previous run's plan is an input to the next one, and worked examples on sunny days, deficit days and negative export prices.
-
-## Appliance self-sustainability
-
-When Helman schedules an appliance (`appliance_runtime`), it can ask what running it *does* to the battery rather than only what the house looks like without it. Two numbers on each condition group control that, and they answer different questions.
-
-**Self-sustainability tolerance %** (`ensure_self_sustainability`) — how much of the battery's capacity the appliance may spend per day on energy the sun did not provide. Helman re-simulates the whole 48-hour horizon with the appliance's runs included and compares it against the same horizon without them. Whatever the runs cost is added up and must fit the tolerance:
-
-```
-spent = (battery the day ends lower than it otherwise would have) + (extra grid energy bought)
-```
-
-Three things about that sum are worth knowing before you pick a value.
-
-- **It is measured against the forecast without the appliance, not against a full battery.** If the day was going to end at 55 % anyway, a tolerance of 10 % of capacity permits it to end near 45 %.
-- **Battery and grid count equally.** A cloudy day where the appliance ends on the same state of charge but imported 2 kWh has spent as much of the tolerance as one where it took 2 kWh out of the battery. Helman does not choose between them: a shortfall is covered by the battery first, and by the grid only once the battery is empty or too slow to keep up. Which one you get is battery physics, not policy — so the tolerance governs both.
-- **It is a ceiling, not a target.** A run placed in midday surplus that would otherwise have been exported can cost nothing at all.
-
-`0` means the day must pay for itself entirely from the sun, which in practice confines the appliance to daylight hours — though it may still dip the battery deeply at noon as long as the afternoon refills it, because the tolerance is about where the day *lands*, not how it swings on the way. `100` switches it off. In between is a real allowance: on a 20 kWh battery, `10` is 2 kWh a day. Higher values are more permissive, and because the unit is a share of the *whole* battery while a single run is a few kWh, the useful settings bunch up at the bottom of the range. Leave it empty to ignore the battery impact entirely.
-
-**Required reserve above min SoC %** (`self_sustainability_margin_pct`, default `5`) — a hard floor the projected battery must never cross, in percentage points above the inverter's own minimum SoC. With an inverter minimum of 10 % and a reserve of 5, the forecast may never drop below 15 %.
-
-The reserve is not a weaker version of the tolerance; the two bite at opposite ends. The reserve is about the battery's worst *moment* and applies across the whole 48-hour horizon, so an evening run can be refused for a dip it would cause the next morning — it bites when the battery is already low. The tolerance is about *how much* is spent and is scored per day — it bites when the battery is full and there is headroom to burn. Both apply at every tolerance value, including `0`: a day can balance overall and still dip too low at noon.
-
-A slot that fails either test is skipped and the next candidate is tried, so a constrained day usually runs fewer hours rather than not running at all. If the battery is projected below the floor even *without* the appliance, the inspector says so rather than blaming the appliance for it.
-
-The mechanism, the trace codes and the config migration are documented in [docs/features/automation/optimizers/helman-appliance-runtime-self-sustainability-implementation-plan.md](docs/features/automation/optimizers/helman-appliance-runtime-self-sustainability-implementation-plan.md).
-
-## Tips and troubleshooting
-- No devices shown under house: ensure Energy → Device consumption is configured and your power
-  sensors feed the statistics used there.
-- House forecast not visible or only showing a status message: confirm
-  `energy_nodes.house.forecast.total_energy_entity_id` is set,
-  `data_and_learning.house_consumption.training_window_days` ≥
-  `data_and_learning.house_consumption.min_history_days`, and Recorder has hourly statistics spanning at
-  least `min_history_days` from the oldest available row.
-- Strange baseline/breakdown numbers: make sure each deferrable consumer is a non-overlapping
-  sub-meter already included in the configured house total.
-- Card resource not auto-registering: auto-registration only works with storage-mode (UI) dashboards.
-- Solar inspector price strip empty or missing bars on past days: neither `sensor.helman_grid_import_price` nor your configured `energy_nodes.grid.forecast.sell_price_entity_id` may be excluded from Recorder. The inspector reads a past day's rates back out of their recorded history, so an `exclude` entry (or a `purge_keep_days` shorter than the inspector's day range) silently costs you that history. The import side falls back to the `import_price_windows` table where history is missing; the export side has no fallback, because a spot price is not derivable from config.
-
-## Scheduled work
-
-Helman runs a handful of jobs on timers. This is what they are, when they fire, and what they
-cost — useful if you are wondering what the integration is doing when you are not looking at it.
-
-| # | Job | Runs on a timer | Also triggered by | Cost |
-|---|---|---|---|---|
-| 1 | **Power tick** | every `data_and_learning.recent_power_history.sampling_interval_seconds` s (default **5 s**) | device-tree invalidation (entity registry updates); a config save | Cheap |
-| 2 | **Schedule executor reconcile** | every **30 s** | startup; any schedule write; execution enable/disable; restore-normal-state; a config save | Cheap |
-| 3 | **Pre-execution reality check** | inside #2, so in practice every **30 s** | — | Cheap |
-| 4 | **Forecast rebuild** | **:00, :15, :30, :45** | startup; a config save; solar-bias trained/status events; a completed house-consumption fit from #6 | Moderate |
-| 5 | **Automation re-plan** | — | a successful #4 (0.5 s debounce, only when automation has enabled optimizers); a day-editor edit; execution enable; condition drift seen by #3; "run now" | Moderate |
-| 6 | **Nightly training batch** | daily at `data_and_learning.training_time` (default **03:00**) | startup or a config save, when the stored profile is missing, no longer matches your config, or is over 48 h old; the manual "train now" button (solar bias only) | **Heavy — off-peak by design** |
-| 7 | **Battery capacity forecast** | — (on demand, 300 s cache) | every card read, when its inputs have actually changed | Moderate |
-
-**Opening or refreshing a card never rebuilds the house or solar forecast.** Those are served from
-the last prepared snapshot, whatever its age; the work that prepares them runs on its own schedule.
-What a read still computes is the battery projection and the appliance demand projection feeding it
-(job #7), and only when its inputs have actually changed — it is anchored to the current battery
-reading, which is what lets the battery curve move the moment you edit a slot. That reading is
-itself one of the inputs, so on a battery under load the cache turns over well before its 300 s
-ceiling. Rebuilding reads today's battery history from Recorder, which is bounded by the length of
-the day.
-
-**No card read issues a multi-day Recorder query.** Appliances that estimate their energy use from
-history (`consumption.projection.strategy: history_average`) used to have their `lookback_days` window read
-inside that projection rebuild, so a card refresh or a slot edit could block on a 30-day scan. That
-estimate is resolved once a night by job #6 now and read from storage here.
-
-If a forecast has not been rebuilt for over an hour, the cards show a warning banner rather than
-going blank — old data still beats no data, and the banner is what tells you something is wrong. A
-card *does* go blank when a setting changes such that the stored data no longer answers the
-question you are now asking; that resolves as soon as the rebuild finishes.
-
-### What each job does
-
-1. **Power tick** — Helman's own live-power sampler, independent of Recorder: it reads your power
-   sensors into ring buffers, works out the "Others" remainder for each parent node, and computes
-   the consumption/production totals and source ratios that colour the bars. Pure state reads and
-   arithmetic, no I/O.
-2. **Schedule executor reconcile** — the only job that touches hardware. It finds the slot covering
-   now and makes the inverter and each appliance match it, issuing a service call only when the
-   desired state differs from what was last applied. With execution disabled, planning still runs;
-   only this apply step is skipped. The cards then show the plan and the reality side by side: the
-   schedule strips keep showing what Helman would do, while the forecast curves project the
-   unmanaged house — no scheduled inverter action and no scheduled appliance run, because neither
-   will happen while execution is off.
-3. **Pre-execution reality check** — execution conditions ("only when the EV is plugged in") are
-   evaluated at planning time and stamped onto each slot. This re-checks them against live state
-   before anything is applied, and asks for a re-plan if reality has moved.
-4. **Forecast rebuild** — rebuilds the house consumption, solar and automation forecasts and
-   publishes them to the cards and sensors. It reads only today's history from Recorder; every
-   multi-day read belongs to job #6.
-5. **Automation re-plan** — the optimizer loop that decides what goes into each schedule slot. It
-   never rebuilds forecasts, it reads the ones job #4 cached, which is why it can also run on its
-   own after an edit.
-6. **Nightly training batch** — the heavy Recorder work, deliberately parked in the small hours. It
-   runs three jobs one after another (never at the same time — they share Recorder's worker
-   thread): solar bias correction, which learns how your forecast provider is systematically wrong
-   for your roof; the house consumption profile, which fits an hour-of-week model over
-   `data_and_learning.house_consumption.training_window_days` of history; and the device energy records, which learn every consumer device's usage — its typical day, its runs and its power while running, shown in the device detail — and from them how much each `history_average` appliance actually draws while it is running. See [docs/device-energy.md](docs/device-energy.md) for what each learned figure means and how it is calculated, with worked examples. All of it is stored, so
-   a restart reuses it instead of recomputing. Changing a relevant setting recomputes immediately
-   rather than waiting for the next night, so you see your change take effect.
-7. **Battery capacity forecast** — projects battery state of charge across the horizon: forecast
-   solar minus forecast demand, with the scheduled action for each slot applied, carried forward
-   from the current live reading. It is what draws the battery curve and why editing a slot moves
-   it right away.
-
-### The knobs that scale the cost
-
-- `data_and_learning.recent_power_history.sampling_interval_seconds` (default 5 s) — how often job #1 samples. Lower means smoother bars and
-  more work; it is the only job on a seconds-level cadence.
-- `data_and_learning.training_time` (default `03:00`) — when the nightly batch runs. Pick a quiet hour: these jobs
-  read a lot of Recorder history and you do not want them competing with anything.
-- `data_and_learning.house_consumption.training_window_days` (default 56) — how much history the house
-  consumption fit reads. This is the single biggest driver of job #6's cost. It has no effect on the
-  per-quarter-hour work.
-- The number of consumer devices, and an appliance's `consumption.projection.lookback_days` (default 30). The device energy records read up to three Recorder queries per device: its energy meter, its power sensor (if it has one) and its switch/climate entity (if it has one). Each entity is read once, over the longest window any device needs it for. A `history_average` appliance reads over its `lookback_days`; every other device, and every shared meter without such an appliance, over the default 30 days. A power sensor that reports every few seconds is the heaviest of these reads. Like `data_and_learning.house_consumption.training_window_days`, this is a **job #6** cost paid once a night, so it scales the nightly run rather than anything you wait for.
-
-### If Home Assistant feels sluggish
-
-All four quarter-hour boundaries behave the same. Job #4 fires at `:00`, `:15`, `:30` and `:45`,
-and measuring what a card actually waits for across each of them showed no difference between them
-— and no difference from ordinary background variation either. If you see a stall on the hour or
-half hour specifically, it is worth looking outside Helman: Home Assistant runs its own periodic
-Recorder and statistics work on those same boundaries.
-
-Things worth checking, roughly in order:
-
-- **Is it 03:00 (or your `data_and_learning.training_time`)?** That is job #6, and it is meant to be heavy. If it is
-  landing at an awkward time, move it.
-- **A very large `data_and_learning.house_consumption.training_window_days`** makes job #6 proportionally
-  more expensive.
-- **A very low `data_and_learning.recent_power_history.sampling_interval_seconds`** makes job #1 run more often. It does no I/O, so this
-  costs CPU rather than Recorder time.
-- **Lots of deferrable consumers** — job #6 reads the training window once per consumer, so the
-  nightly cost scales with how many you configure.
-- **Appliances estimating their energy use from history** — each one adds two multi-day reads to
-  job #6, sized by its `consumption.projection.lookback_days`. Nightly only; nothing on the quarter-hour
-  cadence and nothing a card waits for.
-- **A stale-forecast banner on the cards** means rebuilds have been failing for over an hour; the
-  Home Assistant log will say why.
-
-## Development
-Frontend TypeScript source lives at repo-root `frontend/` (dev-only, never shipped to users).
-
-```bash
-npm --prefix frontend ci
-npm --prefix frontend run build   # → custom_components/helman/frontend_compiled/
-npm --prefix frontend run watch   # dev/watch mode
-```
-
-### Running tests
-
-**Working rule:** while making a change, run the targeted tests for it first (the backend files and frontend specs that cover what you touched). Before pushing, run both full suites once.
-
-#### Backend
-
-The backend tests import the real Home Assistant package, so they need an interpreter with `homeassistant` installed (Python ≥3.14.2, matching HA's floor). The suite is run **one file per process** — many test modules install conflicting `sys.modules` stubs at import time, so a single `pytest tests/` invocation would cross-pollute and fail. `scripts/run_tests.sh` handles this for you, and runs the files in parallel (`$(nproc)` at a time by default; set `JOBS=…` to override, `JOBS=1` runs them serially). Results are printed in input order once every file has finished.
-
-```bash
-scripts/setup_test_venv.sh    # once — creates .venv and installs requirements-test.txt (idempotent)
-scripts/run_tests.sh          # run the whole suite (auto-detects .venv)
-scripts/run_tests.sh tests/test_schedule.py   # run specific files
-JOBS=4 scripts/run_tests.sh   # limit how many files run at once
-```
-
-`scripts/run_tests.sh` uses the repo's `.venv` when present; override with `PYTHON=/path/to/python scripts/run_tests.sh`. To run against the Home Assistant dev container instead of a local venv, use `scripts/run_tests_in_container.sh`.
-
-#### Frontend
-
-The frontend tests are Playwright component tests that mount the built card in a bare page; no running Home Assistant is needed. Each run rebuilds both bundles first (through `frontend/tests/global-setup.ts`), so the tests always exercise the current source.
-
-```bash
-npm --prefix frontend test                                         # run the whole suite
-npm --prefix frontend test -- tests/node-detail-ev-charger.spec.ts # run specific specs
-```
-
-The node-detail specs also capture review screenshots, tagged `@screens` and left out of the default run. To capture one spec's screenshots, point `SCREENS` at a directory:
-
-```bash
-SCREENS=/tmp/shots npm --prefix frontend test -- tests/node-detail-battery.spec.ts
-```
-
-#### CI
-
-CI (`.github/workflows/release.yml`) runs both suites on every push and pull request: the backend job runs `scripts/run_tests.sh` against `requirements-test.txt` (files in parallel, pip cached), and the frontend job runs `npm --prefix frontend test` with 4 Playwright workers. The release job depends on both passing, so a red test run blocks the release.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Scarfsail/hass-helman/main/docs/assets/logo.png" alt="Helman — House Electricity Manager" width="220">
+</p>
+
+<p align="center">
+  <b>Solar, battery and appliances, planned 48 hours ahead and run by Home Assistant.</b><br>
+  <a href="https://scarfsail.github.io/hass-helman/">Manual</a> ·
+  <a href="https://scarfsail.github.io/hass-helman/getting-started/">Getting started</a> ·
+  <a href="https://scarfsail.github.io/hass-helman/automation/recipes/">Recipes</a>
+</p>
+
+---
+
+Helman is a Home Assistant integration for houses with solar panels and a home battery. It learns what your roof produces and what your household consumes, plans the next 48 hours in 15-minute slots, and drives your inverter and appliances by that plan. When a plan changes, Helman can show you why.
+
+## The problem it solves
+
+A battery on its default setting fills at dawn and runs empty after dark. Appliances run on timers set months ago. The result:
+
+- **You sell cheap and store expensive.** The battery fills from morning sun that would have sold well, and the cheap noon surplus is what gets exported.
+- **You buy at the peak.** On a short day the battery is empty by the afternoon, and the evening runs on the most expensive grid hours.
+- **An outage finds the battery empty.**
+- **The pool pump runs at 10:00 on a grey day** and stays off on a bright evening.
+
+Helman replaces fixed rules with a plan built from tomorrow's forecast, your tariff and the day-ahead export prices.
+
+## What it does
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**See where every watt goes.** Live solar, battery, grid and house power, with the house broken down into a tree of devices, breakers and sockets. The consumption no meter explains has its own row.
+
+</td>
+<td width="50%" valign="top">
+
+<img src="https://raw.githubusercontent.com/Scarfsail/hass-helman/main/docs/assets/images/flow-card.png" alt="Energy flow card">
+
+</td>
+</tr>
+</table>
+
+**Forecasts you can trust.** Your solar forecast is corrected for the repeating errors of your own roof (a tree at 8:30, an optimistic provider) and scaled live as the day unfolds. Household consumption is learned per hour of the week. A battery projection follows every planned action.
+
+**A 48-hour plan that acts.** You describe goals and optimizers turn them into actions, slot by slot:
+
+| Goal | Optimizer |
+| --- | --- |
+| Fill the battery from the cheapest export slots and sell the dear ones | Charge hold |
+| Always keep an outage reserve, topped up from the cheap tariff before expensive hours | Battery reserve |
+| Stop exporting when the price goes negative | Export price |
+| Charge the car at night without draining the house battery into it | Battery hold while EV charges |
+| Run the pool pump 4 h a day in the cheapest sunny hours; heat the pool only on surplus | Appliance runtime |
+
+<img src="https://raw.githubusercontent.com/Scarfsail/hass-helman/main/docs/assets/images/inspector-past-day.png" alt="Inspector: forecast against reality, battery, prices and money for one day">
+
+*The inspector: one day of solar forecast against production, house use, battery, prices and money, with the plan for the slots ahead.*
+
+**Every decision explained.** Tap any planned slot to see which conditions held, which did not, and what is re-checked right before running. You can override any slot by hand, and your manual slots are never changed by automation.
+
+<img src="https://raw.githubusercontent.com/Scarfsail/hass-helman/main/docs/assets/images/schedule-explain.png" alt="Schedule editor explaining why a slot was planned">
+
+**Know what each device costs.** Reports rank every device by energy and money over any period, split by where its energy came from: sun, battery or grid.
+
+**Safe by default.** Helman plans from the moment it is set up, but changes hardware only after you switch **Execute actions** on. Until then you can watch the plans for as long as you like.
+
+## What you need
+
+- Home Assistant with Recorder history
+- A hybrid inverter with a battery. **SolaX** (`solax_modbus`) works out of the box through a hardware profile; other inverters work through a few [helper entities](https://scarfsail.github.io/hass-helman/supporting-entities/)
+- A solar forecast integration with daily energy sensors (Forecast.Solar and compatible)
+- Optional but recommended: an export price entity with day-ahead prices, and your import tariff windows
+
+## Install
+
+1. HACS → ⋮ → **Custom repositories** → add `https://github.com/Scarfsail/hass-helman`, category **Integration**.
+2. Install **Helman Energy** and restart Home Assistant.
+3. **Settings → Devices & services → Add integration → Helman Energy**.
+4. Open **Helman Energy Config** in the sidebar and follow [First setup](https://scarfsail.github.io/hass-helman/getting-started/first-setup/).
+
+The Lovelace cards are registered automatically.
+
+## Documentation
+
+The full manual lives at **[scarfsail.github.io/hass-helman](https://scarfsail.github.io/hass-helman/)**. It covers setup, the concepts, everyday use, every optimizer with its reasoning, devices, learning and a reference.
+
+Contributing or building from source: [Development](https://scarfsail.github.io/hass-helman/reference/development/).

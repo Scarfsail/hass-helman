@@ -36,3 +36,6 @@ env/
 
 # Home Assistant
 .storage/
+
+# MkDocs build output
+/site/
