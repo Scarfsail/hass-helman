@@ -1,14 +1,17 @@
-import { LitElement, PropertyValues, css, html, unsafeCSS } from "lit-element";
+import { LitElement, PropertyValues, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { TreeItem } from "../shared/data/tree-item";
 import { nothing } from "lit-html";
 import { NEUTRAL_LIGHT_COLOR, canonicalSourceColor } from "../color-utils";
 import { keyed } from "lit/directives/keyed.js";
-import { FLOW_SURGE_LENGTH_CSS, flowBeam, flowBeatStyles, flowHot, flowRatio, flowSurgeGradient, flowSurgeStartCss, flowSurges, syncFlowRates, type FlowBeamLengths } from "../shared/flow-style";
+import { FLOW_SURGE_LENGTH, flowBeam, flowBeatStyles, flowRatio, flowSurges, flowTrailGradient, syncFlowRates, type FlowBeamLengths } from "../shared/flow-style";
 import { helmanColorVars } from "../color-vars";
 
 /** At or below this many watts a column draws no flow and its row no glow. */
 export const ARROW_IDLE_W = 0.4;
+
+/** An arrow's height in its own CSS px: how far its surges move down it, however an ancestor scales it on screen. */
+const ARROW_HEIGHT = 22;
 
 /** One coloured band of a ribbon: where a share of its power came from. */
 interface FlowBand {
@@ -45,8 +48,9 @@ function flowBands(item: TreeItem, sources: readonly TreeItem[]): FlowBand[] {
  * The beams between two rows of the helman card, one per column.
  *
  * A beam is `flowThickness` wide, its body the column's source-share bands
- * with a hot core and a static bloom over them, and its surges run at the
- * column's own speed, as many as its measured length holds. It ends square.
+ * under a static bloom, and its surges, each a hot head with a fading tail,
+ * run down it at the column's own speed, as many as its measured length
+ * holds. It ends square.
  *
  * The animations never end, so their per-frame cost is paid for as long as the
  * card is on the page. They therefore move nothing but `transform` (the
@@ -139,7 +143,7 @@ export class PowerFlowArrows extends LitElement {
             }
             .animated-arrow {
                 position: relative;
-                height: 22px;
+                height: ${ARROW_HEIGHT}px;
                 margin: 0 auto;
             }
             .body, .segments {
@@ -152,13 +156,6 @@ export class PowerFlowArrows extends LitElement {
             }
             .segment {
                 min-width: 0;
-            }
-            .core {
-                position: absolute;
-                top: 0;
-                bottom: 0;
-                left: 50%;
-                transform: translateX(-50%);
             }
             .surges {
                 position: absolute;
@@ -173,11 +170,9 @@ export class PowerFlowArrows extends LitElement {
                 position: absolute;
                 left: 0;
                 right: 0;
-                top: -50%;
-                height: 100%;
-                background-position: center;
-                background-repeat: no-repeat;
-                background-size: 100% ${unsafeCSS(FLOW_SURGE_LENGTH_CSS)};
+                top: ${-FLOW_SURGE_LENGTH / 2}px;
+                height: ${FLOW_SURGE_LENGTH}px;
+                border-radius: 999px;
             }
             :host([paused]) [data-beat] {
                 animation-play-state: paused;
@@ -200,8 +195,9 @@ export class PowerFlowArrows extends LitElement {
                     const color = canonicalSourceColor(bands.reduce((max, band) => band.share > max.share ? band : max).sourceType, NEUTRAL_LIGHT_COLOR);
                     const r = flowRatio(device.powerValue, maxPower);
                     const beam = flowBeam(r, color);
-                    const { count, rate, surges } = flowSurges(r, this._beamLengths[index]);
-                    const surgeGradient = flowSurgeGradient(color, beam);
+                    const length = this._beamLengths[index];
+                    const { count, rate, surges } = flowSurges(r, length);
+                    const trail = flowTrailGradient(color, beam, "to bottom");
                     // The beam is measured down its own height; its column, whose width never follows the power, is
                     // what is watched for a resize, so a power tick never re-measures it.
                     return html`
@@ -217,12 +213,11 @@ export class PowerFlowArrows extends LitElement {
                                             ></div>
                                         `)}
                                     </div>
-                                    <div class="core" style="width: ${beam.coreWidth}px; background: ${flowHot(color)}"></div>
                                 </div>
                                 <div class="surges" style="width: ${beam.surgeWidth}px; opacity: ${beam.surgeOpacity}">
                                     ${keyed(count, surges.map((surge) => html`
                                         <div class="band" data-beat="surge" data-rate=${rate}
-                                            style="background-image: ${surgeGradient}; --surge-x: 0px; --surge-y: 100%; --surge-start-x: 0px; --surge-start-y: ${flowSurgeStartCss(1)}; --surge-rest: ${surge.rest}; animation-delay: ${surge.delay}"></div>
+                                            style="background-image: ${trail}; --surge-x: 0px; --surge-y: ${ARROW_HEIGHT}px; --surge-start-x: 0px; --surge-start-y: ${-FLOW_SURGE_LENGTH / 2}px; --surge-rest: ${surge.rest}; animation-delay: ${surge.delay}"></div>
                                     `))}
                                 </div>
                             </div>

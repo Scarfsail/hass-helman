@@ -14,7 +14,7 @@ import "./simple-card-battery";
 import "./simple-card-grid";
 import "./simple-card-house";
 import { helmanColorVars } from "../color-vars";
-import { FLOW_SURGE_LENGTH_CSS, flowBeam, flowBeatStyles, flowGlow, flowHalo, flowHot, flowRatio, flowSurgeLead, flowSurgeLength, flowSurgeStartCss, flowSurgeStops, flowSurges, syncFlowRates, type FlowBeam, type FlowBeamLengths } from "../shared/flow-style";
+import { FLOW_SURGE_LENGTH, flowBeam, flowBeatStyles, flowFadeShare, flowGlow, flowHalo, flowRatio, flowSurges, flowTrailStops, syncFlowRates, type FlowBeam, type FlowBeamLengths } from "../shared/flow-style";
 import { dominantFlowColor, getFlowColor, type FlowSource } from "./flow-colors";
 import { IDLE_W, liveFlows } from "../node-detail/live-flows";
 
@@ -35,6 +35,10 @@ interface DrawnEdge {
 /** The diagonal overlay's viewBox: the energy grid at its default size, px. */
 const OVERLAY_W = 200;
 const OVERLAY_H = 168;
+
+/** A beam's coordinate as a CSS length: a percentage as it is, a bare number in px. */
+/** The vertical connectors' row, px: their length on screen until it is measured. */
+const CONNECTOR_ROW_H = 28;
 
 /** A node's halo, while it has a flow: its ratio and its colour. */
 interface Halo {
@@ -103,7 +107,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         .energy-grid {
             display: grid;
             grid-template-columns: 1fr 20px 1fr;
-            grid-template-rows: auto 28px auto;
+            grid-template-rows: auto ${CONNECTOR_ROW_H}px auto;
             align-items: center;
             justify-items: center;
             margin: 0 auto;
@@ -151,7 +155,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             pointer-events: none;
             overflow: visible;
         }
-        .flow-bloom, .flow-beam, .flow-core {
+        .flow-bloom, .flow-beam {
             fill: none;
             stroke-linecap: butt;
         }
@@ -369,7 +373,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         const h = this._config?.height;
         const parts: string[] = [];
         if (w !== undefined) parts.push(`width: ${w}px`);
-        if (h !== undefined) parts.push(`height: ${h}px`, `grid-template-rows: 1fr 28px 1fr`);
+        if (h !== undefined) parts.push(`height: ${h}px`, `grid-template-rows: 1fr ${CONNECTOR_ROW_H}px 1fr`);
         return parts.join("; ");
     }
 
@@ -425,11 +429,14 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
     /**
      * A beam from its first endpoint to its second: its bloom, the body in
-     * the flow's colour, a hot core along it, and its surges, clipped
-     * to the beam's ends by a mask of its own shape. The bloom is a blurred
-     * copy of the body under it (a shadow's blur radius is twice the blur's
-     * deviation) rather than a shadow of the body, so the body's opacity does
-     * not dim it.
+     * the flow's colour, and its surges, all under one mask that fades them
+     * out into the nodes over `flowFadeShare` of the beam at each end. The
+     * bloom is a blurred copy of the body under it (a shadow's blur radius is
+     * twice the blur's deviation) rather than a shadow of the body, so the
+     * body's opacity does not dim it. The mask reaches three deviations
+     * either side, scaled as the overlay is, since the blur is in its units.
+     * The static bloom and body and the animated surges are two groups under
+     * that mask, so a surge's frame never repaints the blur.
      *
      * Only the surges animate, and only their transform. vector-effect is
      * kept off them: a non-scaling stroke takes the animation off the
@@ -440,14 +447,14 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
      *
      * The surges come from the beam's length on screen, as `syncFlowRates`
      * measured it (`data-flow-beam`): how many, their rate, and on every beam
-     * but a vertical one, which takes its length as a CSS percentage, the
-     * blob's length and where its centre starts.
-     *
-     * The beam ends square, and so does its mask, so a surge shows exactly
-     * over the length its travel is reckoned from.
+     * but a vertical one, which takes its length as a CSS percentage, where
+     * a surge's centre starts. So does the fade, which until then takes the
+     * beam's length in its own units, scaled as the overlay is, or a vertical
+     * connector's row.
      */
     private _flowLine(key: string, color: string, { r, beam }: DrawnEdge, x1: string, y1: string, x2: string, y2: string, nonScaling = false) {
         const gradientId = `${this._flowId}-${key}-gradient`;
+        const fadeId = `${this._flowId}-${key}-fade`;
         const maskId = `${this._flowId}-${key}-mask`;
         const vectorEffect = nonScaling ? "non-scaling-stroke" : "none";
         const length = this._beamLengths[key];
@@ -457,50 +464,55 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         const vertical = x1 === x2;
         const dx = parseFloat(x2) - parseFloat(x1);
         const dy = vertical ? 0 : parseFloat(y2) - parseFloat(y1);
-        const halfThickness = beam.surgeWidth / 2;
-        const halfLength = flowSurgeLength(length ?? 0) / 2;
-        // The share of the beam a surge's centre starts back from its start.
-        const share = length ? flowSurgeLead(length) / length : 0;
         const [scaleX, scaleY] = nonScaling ? this._overlayScale : [1, 1];
-        // The beam's vector, and where a surge's centre starts: its lead back from the beam's start.
+        const fade = flowFadeShare(length ?? (vertical ? CONNECTOR_ROW_H : Math.hypot(dx * scaleX, dy * scaleY)));
+        const half = FLOW_SURGE_LENGTH / 2;
+        // The share of the beam a surge's centre starts back from its start.
+        const share = length ? half / length : 0;
+        const towards = Math.sign(parseFloat(y2) - parseFloat(y1));
+        // The beam's vector, and where a surge's centre starts: half its length back from the beam's start.
         const surgeVector = vertical
-            ? `--surge-x: 0px; --surge-y: ${parseFloat(y2) - parseFloat(y1)}%; --surge-start-x: 0px; --surge-start-y: ${flowSurgeStartCss(Math.sign(parseFloat(y2) - parseFloat(y1)))}`
+            ? `--surge-x: 0px; --surge-y: ${parseFloat(y2) - parseFloat(y1)}%; --surge-start-x: 0px; --surge-start-y: ${-towards * half}px`
             : `--surge-x: ${dx}px; --surge-y: ${dy}px; --surge-start-x: ${-dx * share}px; --surge-start-y: ${-dy * share}px`;
-        const blob = vertical
-            ? svg`<ellipse cx=${x1} cy=${y1} rx=${halfThickness} style="ry: calc(${FLOW_SURGE_LENGTH_CSS} / 2)" fill="url(#${gradientId})"/>`
-            : nonScaling
-                ? svg`<ellipse rx=${halfLength} ry=${halfThickness} fill="url(#${gradientId})"
-                        transform="translate(${x1} ${y1}) scale(${1 / scaleX} ${1 / scaleY}) rotate(${Math.atan2(dy * scaleY, dx * scaleX) * 180 / Math.PI})"/>`
-                : svg`<ellipse cx=${x1} cy=${y1} rx=${halfLength} ry=${halfThickness} fill="url(#${gradientId})"/>`;
+        // A surge runs along its own x from its tail to its head, turned to the beam on the overlay; on a
+        // straight connector it lies along the connector, which may run either way, and its gradient with it.
+        const across = beam.surgeWidth;
+        const [ux, uy] = nonScaling ? [1, 0] : vertical ? [0, towards] : [Math.sign(dx), 0];
+        const pulse = nonScaling
+            ? svg`<rect x=${-half} y=${-across / 2} width=${FLOW_SURGE_LENGTH} height=${across} rx=${across / 2} fill="url(#${gradientId})"
+                    transform="translate(${x1} ${y1}) scale(${1 / scaleX} ${1 / scaleY}) rotate(${Math.atan2(dy * scaleY, dx * scaleX) * 180 / Math.PI})"/>`
+            : svg`<rect x=${x1} y=${y1} width=${vertical ? across : FLOW_SURGE_LENGTH} height=${vertical ? FLOW_SURGE_LENGTH : across} rx=${across / 2} fill="url(#${gradientId})"
+                    transform="translate(${vertical ? -across / 2 : -half} ${vertical ? -half : -across / 2})"/>`;
         // Keyed by their count: a new count starts the edge's surges afresh, together, so they stay evenly spread.
         return svg`
             <defs>
-                <radialGradient id=${gradientId}>
-                    ${flowSurgeStops(color, beam).map(([offset, stop]) => svg`<stop offset=${offset} style="stop-color: ${offset === 1 ? color : stop}; stop-opacity: ${offset === 1 ? 0 : 1}"/>`)}
-                </radialGradient>
+                <linearGradient id=${gradientId} x1=${(1 - ux) / 2} y1=${(1 - uy) / 2} x2=${(1 + ux) / 2} y2=${(1 + uy) / 2}>
+                    ${flowTrailStops(color, beam).map(([offset, stop, strength]) => svg`<stop offset=${offset} style="stop-color: ${stop}; stop-opacity: ${strength}"/>`)}
+                </linearGradient>
+                <linearGradient id=${fadeId} gradientUnits="userSpaceOnUse" x1=${x1} y1=${y1} x2=${x2} y2=${y2}>
+                    ${[[0, 0], [fade, 1], [1 - fade, 1], [1, 0]].map(([offset, opacity]) => svg`<stop offset=${offset} stop-color="white" stop-opacity=${opacity}/>`)}
+                </linearGradient>
                 <mask id=${maskId} maskUnits="userSpaceOnUse" x="-1000" y="-1000" width="2000" height="2000">
                     <line x1=${x1} y1=${y1} x2=${x2} y2=${y2}
-                          stroke="white" stroke-width=${beam.surgeWidth} stroke-linecap="butt"
+                          stroke="url(#${fadeId})" stroke-width=${beam.width + 3 * beam.bloomBlur * Math.max(scaleX, scaleY)} stroke-linecap="butt"
                           vector-effect=${vectorEffect}/>
                 </mask>
             </defs>
-            <line class="flow-bloom" x1=${x1} y1=${y1} x2=${x2} y2=${y2}
-                  stroke-width=${beam.width}
-                  vector-effect=${vectorEffect}
-                  style="stroke: ${beam.bloomColor}; filter: blur(${beam.bloomBlur / 2}px)"/>
-            <line class="flow-beam" data-flow-beam=${key} data-flow=${key} x1=${x1} y1=${y1} x2=${x2} y2=${y2}
-                  stroke=${color} stroke-width=${beam.width}
-                  vector-effect=${vectorEffect}
-                  style="opacity: ${beam.bodyOpacity}"/>
-            <line class="flow-core" x1=${x1} y1=${y1} x2=${x2} y2=${y2}
-                  stroke-width=${beam.coreWidth}
-                  vector-effect=${vectorEffect}
-                  style="stroke: ${flowHot(color)}; opacity: ${beam.bodyOpacity}"/>
+            <g mask="url(#${maskId})">
+                <line class="flow-bloom" x1=${x1} y1=${y1} x2=${x2} y2=${y2}
+                      stroke-width=${beam.width}
+                      vector-effect=${vectorEffect}
+                      style="stroke: ${beam.bloomColor}; filter: blur(${beam.bloomBlur / 2}px)"/>
+                <line class="flow-beam" data-flow-beam=${key} data-flow=${key} x1=${x1} y1=${y1} x2=${x2} y2=${y2}
+                      stroke=${color} stroke-width=${beam.width}
+                      vector-effect=${vectorEffect}
+                      style="opacity: ${beam.bodyOpacity}"/>
+            </g>
             <g mask="url(#${maskId})" opacity=${beam.surgeOpacity}>
                 ${keyed(count, surges.map((surge) => svg`
                     <g class="flow-surge" data-beat="surge" data-rate=${rate}
                        style="${surgeVector}; --surge-rest: ${surge.rest}; animation-delay: ${surge.delay}">
-                        ${blob}
+                        ${pulse}
                     </g>`))}
             </g>
         `;

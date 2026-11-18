@@ -3,17 +3,17 @@ import { CARD_BUNDLE, loadBundle } from "./support/card-page";
 import { installMockHass } from "./support/mock-hass";
 import { cardTree, treeNode, treePayload } from "./support/payload-builders";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
-import { flowBeam, flowEase, flowGlow, flowGlowPeriodMs, flowGlowSize, flowLevel, flowRatio, flowScaleW, flowSpeed, flowSurgeCount, flowSurgeGradient, flowSurgeLead, flowSurgeLength, flowSurgeRate, flowSurges, flowSurgeTravel, flowThickness } from "../cards/shared/flow-style";
+import { FLOW_SURGE_LENGTH, flowBeam, flowEase, flowFadeShare, flowGlow, flowGlowPeriodMs, flowGlowSize, flowLevel, flowRatio, flowScaleW, flowSpeed, flowSurgeCount, flowSurgeRate, flowSurges, flowSurgeTravel, flowTail, flowThickness, flowTrailGradient } from "../cards/shared/flow-style";
 
 /**
- * The look of a flow (#770, #776, #778): one ratio per flow and per node,
+ * The look of a flow (#770, #776, #778, #785): one ratio per flow and per node,
  * `r = clamp((power − 200) / (max − 200), 0, 1)` (the 200 W floor,
  * `FLOW_FLOOR_W`) against one shared scale, drives through one easing
  * `t = sqrt(r)` the cues that agree with each other -- beam thickness and
- * brightness, surge width and speed, glow brightness, size and rate -- as
+ * brightness, a surge's tail and speed, glow brightness, size and rate -- as
  * continuous curves. Each edge and each glow runs its own tempo; a
  * surge's speed is a velocity on screen, px/s, from its power alone, and its
- * blob and the spacing between surges are fixed lengths on screen, so a flow
+ * path and the spacing between surges are fixed lengths on screen, so a flow
  * pulses at the same rhythm on every beam.
  *
  * The animated elements only ever move their transform, or their opacity
@@ -35,12 +35,19 @@ test.describe("the tables, unit-checked", () => {
         expect(RATIOS.map(flowEase)).toEqual(RATIOS.map((r) => expect.closeTo(Math.sqrt(r), 12)));
     });
 
-    test("beam thickness runs from 1.5 px at r = 0 to 21 px at the maximum, along the square root", () => {
-        expect(RATIOS.map(flowThickness)).toEqual(RATIOS.map((r) => expect.closeTo(1.5 + 19.5 * Math.sqrt(r), 10)));
-        expect(flowThickness(0)).toBe(1.5);
-        expect(flowThickness(1)).toBe(21);
-        // A quarter of the scale is already half way up: 1.5 + 19.5 / 2.
-        expect(flowThickness(0.25)).toBeCloseTo(11.25, 10);
+    test("beam thickness runs from 1 px at r = 0 to 8 px at the maximum, along the square root", () => {
+        expect(RATIOS.map(flowThickness)).toEqual(RATIOS.map((r) => expect.closeTo(1 + 7 * Math.sqrt(r), 10)));
+        expect(flowThickness(0)).toBe(1);
+        expect(flowThickness(1)).toBe(8);
+        // A quarter of the scale is already half way up: 1 + 7 / 2.
+        expect(flowThickness(0.25)).toBeCloseTo(4.5, 10);
+    });
+
+    test("a surge's tail runs from 14 px at r = 0 to 38 px at the maximum, along the square root", () => {
+        expect(RATIOS.map(flowTail)).toEqual(RATIOS.map((r) => expect.closeTo(14 + 24 * Math.sqrt(r), 10)));
+        expect(flowTail(0)).toBe(14);
+        expect(flowTail(1)).toBe(38);
+        expect(strictlyRising(RATIOS.map(flowTail))).toBe(true);
     });
 
     test("the level runs from 0.2 to 1 along the square root", () => {
@@ -59,12 +66,12 @@ test.describe("the tables, unit-checked", () => {
         expect(flowSpeed(0.25)).toBeCloseTo(31.5, 10);
     });
 
-    test("one curve: thickness, surge width and halo, level, glow size and speed all rise with r, each a fixed function of flowEase", () => {
+    test("one curve: thickness, surge width and tail, level, glow size and speed all rise with r, each a fixed function of flowEase", () => {
         const fine = Array.from({ length: 1001 }, (_, index) => index / 1000);
         const cues = {
             thickness: fine.map(flowThickness),
-            surge: fine.map((r) => flowBeam(r, "red").surgeThickness),
-            halo: fine.map((r) => { const beam = flowBeam(r, "red"); return beam.surgeWidth - beam.surgeThickness; }),
+            surge: fine.map((r) => flowBeam(r, "red").surgeWidth),
+            tail: fine.map((r) => flowBeam(r, "red").tail),
             level: fine.map(flowLevel),
             glow: fine.map(flowGlowSize),
             speed: fine.map(flowSpeed),
@@ -73,34 +80,61 @@ test.describe("the tables, unit-checked", () => {
         // Each cue is the same affine map of t = flowEase(r) at every r: none reads r directly.
         for (const [index, r] of fine.entries()) {
             const t = flowEase(r);
-            expect(cues.thickness[index]).toBeCloseTo(1.5 + 19.5 * t, 10);
-            expect(cues.surge[index]).toBeCloseTo(1.5 + 19.5 * t + 4 + 8 * t, 10);
-            expect(cues.halo[index]).toBeCloseTo(2 * (2 + 6 * t), 10);
+            expect(cues.thickness[index]).toBeCloseTo(1 + 7 * t, 10);
+            expect(cues.surge[index]).toBeCloseTo(1 + 7 * t + 1, 10);
+            expect(cues.tail[index]).toBeCloseTo(14 + 24 * t, 10);
             expect(cues.level[index]).toBeCloseTo(0.2 + 0.8 * t, 10);
             expect(cues.glow[index]).toBeCloseTo(t, 10);
             expect(cues.speed[index]).toBeCloseTo(3 + 57 * t, 10);
         }
     });
 
-    test("on one scale, 103 W draws thinner, dimmer, with a narrower surge and slower than 2.3 kW", () => {
+    test("on one scale, 103 W draws thinner, dimmer, with a narrower surge, a shorter tail and slower than 2.3 kW", () => {
         const scale = 17_250;
         const [small, large] = [103, 2300].map((power) => flowRatio(power, scale)).map((r) => ({ ...flowBeam(r, "red"), speed: flowSpeed(r), level: flowLevel(r) }));
         expect(small.width).toBeLessThan(large.width);
         expect(small.level).toBeLessThan(large.level);
-        expect(small.surgeThickness).toBeLessThan(large.surgeThickness);
+        expect(small.bodyOpacity).toBeLessThan(large.bodyOpacity);
+        expect(small.surgeWidth).toBeLessThan(large.surgeWidth);
+        expect(small.tail).toBeLessThan(large.tail);
         expect(small.speed).toBeLessThan(large.speed);
-        // A bubble around the pipe: 5.5 px around 103 W's 1.5 px floor, about 15.2 around 2.3 kW's 8.3, inside a halo that grows too.
-        expect(small.surgeThickness).toBeCloseTo(5.5, 10);
-        expect(large.surgeThickness).toBeCloseTo(15.154, 2);
-        expect(small.surgeWidth - small.surgeThickness).toBeLessThan(large.surgeWidth - large.surgeThickness);
-        expect(flowBeam(1, "red")).toMatchObject({ surgeThickness: 33, surgeWidth: 49 });
+        // A pulse a pixel wider than its pipe: 2 px on 103 W's 1 px floor with a 14 px tail, about 4.5 on 2.3 kW's 3.5 with a 22.4 px one.
+        expect(small).toMatchObject({ surgeWidth: 2, tail: 14 });
+        expect(large.surgeWidth).toBeCloseTo(4.457, 2);
+        expect(large.tail).toBeCloseTo(22.423, 2);
+        expect(flowBeam(1, "red")).toMatchObject({ width: 8, surgeWidth: 9, tail: 38 });
     });
 
-    test("a surge's gradient stops step in 0.05 of its width, so close powers paint the same gradient while the widths stay exact", () => {
+    test("the body is dim and the pulse bright: body at 0.14 + 0.3 k, pulse at 0.55 + 0.45 k, bloom at 0.27 k", () => {
+        for (const r of RATIOS) {
+            const k = flowLevel(r);
+            const beam = flowBeam(r, "red");
+            expect(beam.bodyOpacity).toBeCloseTo(0.14 + 0.3 * k, 10);
+            expect(beam.surgeOpacity).toBeCloseTo(0.55 + 0.45 * k, 10);
+            expect(beam.surgeOpacity).toBeGreaterThan(beam.bodyOpacity);
+            expect(beam.bloomBlur).toBeCloseTo(0.6 * (beam.width + 2 + 8 * k), 2);
+            expect(beam.bloomColor).toBe(`color-mix(in srgb, red ${+(27 * k).toFixed(1)}%, transparent)`);
+        }
+    });
+
+    test("a surge's gradient runs clear, the tail in its colour, the hot head, clear at the tip, its tail's share in steps of 0.05", () => {
+        // The longest tail fills the whole path: clear at the tail's end, 0.35 at 55 %, 0.9 at 86 %, hot at 94 %, clear at the tip.
+        expect(flowTrailGradient("red", flowBeam(1, "red"), "to bottom")).toBe("linear-gradient(to bottom, "
+            + "color-mix(in srgb, red 0%, transparent) 0%, color-mix(in srgb, red 35%, transparent) 55%, color-mix(in srgb, red 90%, transparent) 86%, "
+            + "color-mix(in srgb, color-mix(in srgb, white var(--helman-flow-hot-mix), red) 100%, transparent) 94%, "
+            + "color-mix(in srgb, color-mix(in srgb, white var(--helman-flow-hot-mix), red) 0%, transparent) 100%)");
+        // A shorter tail leaves the back of the path clear: the faintest's 3 + 14 px of 41 rounds to 0.4 of it.
+        expect(flowTrailGradient("red", flowBeam(0, "red"), "to bottom")).toMatch(/^linear-gradient\(to bottom, color-mix\(in srgb, red 0%, transparent\) 60%, /);
+        // Close powers paint the same gradient, while the tails stay exact.
         const [a, b] = [2300, 2310].map((power) => flowBeam(flowRatio(power, 17_250), "red"));
-        expect(a.surgeWidth).not.toBe(b.surgeWidth);
-        expect(flowSurgeGradient("red", a)).toBe(flowSurgeGradient("red", b));
-        expect(flowSurgeGradient("red", flowBeam(0, "red"))).not.toBe(flowSurgeGradient("red", flowBeam(1, "red")));
+        expect(a.tail).not.toBe(b.tail);
+        expect(flowTrailGradient("red", a, "to bottom")).toBe(flowTrailGradient("red", b, "to bottom"));
+    });
+
+    test("a simple-card beam fades out over 10 px at each end, or 0.3 of a short one", () => {
+        expect([10, 20, 33, 34, 50, 100, 400].map(flowFadeShare)).toEqual([0.3, 0.3, 0.3, 0.2941, 0.2, 0.1, 0.025]);
+        // Not measured yet, or not laid out: the most a beam fades.
+        expect(flowFadeShare(0)).toBe(0.3);
     });
 
     test("a flow at or under the 200 W floor draws at r = 0, and the ratio runs from the floor to the scale, clamped", () => {
@@ -110,9 +144,9 @@ test.describe("the tables, unit-checked", () => {
         expect(flowRatio(8725, 17_250)).toBeCloseTo(0.5, 10);
         // A scale at or under the floor, or none, draws everything at the lowest ratio.
         for (const max of [null, undefined, 0, 150, 200]) expect(flowRatio(5000, max)).toBe(0);
-        // On the local 17.25 kW scale: 130 W on the floor, 500 W about 4.1 px, 2.3 kW about 8.3, 10 kW about 16.3.
+        // On the local 17.25 kW scale: 130 W on the floor, 500 W about 1.9 px, 2.3 kW about 3.5, 10 kW about 6.3.
         expect([130, 500, 2300, 10_000].map((power) => flowThickness(flowRatio(power, 17_250))))
-            .toEqual([1.5, 4.087, 8.344, 16.284].map((width) => expect.closeTo(width, 2)));
+            .toEqual([1, 1.928, 3.457, 6.307].map((width) => expect.closeTo(width, 2)));
     });
 
     test("the shared scale is the largest positive maximum, nulls ignored, else 0", () => {
@@ -122,32 +156,23 @@ test.describe("the tables, unit-checked", () => {
         expect(flowScaleW([])).toBe(0);
     });
 
-    test("a surge's blob is 12 px long, and no more than 0.9 of a tiny beam", () => {
-        expect([5, 10, 13.3, 22, 28, 60, 107, 400].map(flowSurgeLength)).toEqual([4.5, 9, 11.97, 12, 12, 12, 12, 12].map((l) => expect.closeTo(l, 10)));
+    test("a surge is drawn 41 px long, its 3 px head and its longest tail, whatever its power or its beam", () => {
+        expect(FLOW_SURGE_LENGTH).toBe(41);
     });
 
-    test("a beam's crossing is its length and a surge's length, short of the hand-off overlap at each end, and the rate runs it once per crossing", () => {
-        // From 1.5 px of the blob over the start to 1.5 px of it over the end: half a 12 px blob less 1.5 px each side.
-        expect(flowSurgeLead(60)).toBe(4.5);
-        expect(flowSurgeTravel(60)).toBe(69);
-        // 60 px at 120 px/s: (60 + 12 - 3) / 120 = 575 ms, 1.74 loops a second.
-        expect(flowSurgeRate(120, 60)).toBe(1.74);
-        // 28 px at 3 px/s: (28 + 12 - 3) / 3 = 12.3 s.
-        expect(flowSurgeRate(3, 28)).toBe(0.0811);
+    test("a beam's crossing is its length and a surge's, from wholly before its start to wholly past its end, and the rate runs it once per crossing", () => {
+        expect(flowSurgeTravel(60)).toBe(101);
+        // 60 px at 120 px/s: (60 + 41) / 120 = 842 ms, 1.19 loops a second.
+        expect(flowSurgeRate(120, 60)).toBe(1.19);
+        // 28 px at 3 px/s: (28 + 41) / 3 = 23 s.
+        expect(flowSurgeRate(3, 28)).toBe(0.0435);
     });
 
-    test("on a beam too short for the hand-off, a crossing is never shorter than the beam and the rate stays finite and forward", () => {
-        // 1 px: a 0.9 px blob, no room for a 1.5 px hand-off, so its centre runs from the start to the end.
-        expect(flowSurgeLead(1)).toBe(0);
-        expect(flowSurgeTravel(1)).toBe(1);
-        expect(flowSurgeRate(120, 1)).toBe(120);
-        // 3 px: a 2.7 px blob, still no room.
-        expect(flowSurgeLead(3)).toBe(0);
-        expect(flowSurgeTravel(3)).toBe(3);
-        expect(flowSurgeRate(120, 3)).toBe(40);
+    test("on a tiny beam, a crossing is never shorter than the beam and the rate stays finite and forward", () => {
+        expect(flowSurgeTravel(1)).toBe(42);
+        expect(flowSurgeRate(120, 1)).toBe(2.86);
         for (let length = 0.01; length < 20; length += 0.01) {
-            expect(flowSurgeLead(length)).toBeGreaterThanOrEqual(0);
-            expect(flowSurgeTravel(length)).toBeGreaterThanOrEqual(length);
+            expect(flowSurgeTravel(length)).toBeGreaterThan(length);
             const rate = flowSurgeRate(3, length);
             expect(Number.isFinite(rate) && rate > 0).toBe(true);
         }
@@ -164,9 +189,9 @@ test.describe("the tables, unit-checked", () => {
         }
     });
 
-    test("a beam carries one surge per ~40 px of its length and a blob, at least one, whatever its power", () => {
+    test("a beam carries one surge per ~42 px of its length and a surge's, at least one, whatever its power", () => {
         const lengths = [5, 22, 28, 47, 60, 87, 107, 200];
-        expect(lengths.map((length) => flowSurgeCount(length))).toEqual([1, 1, 1, 1, 2, 2, 3, 5]);
+        expect(lengths.map((length) => flowSurgeCount(length))).toEqual([1, 2, 2, 2, 2, 3, 4, 6]);
         // The power has no say: the same beam carries the same count at any r.
         for (const r of RATIOS) expect(flowSurges(r, 60).count).toBe(2);
     });
@@ -438,11 +463,10 @@ const FLOW_BEAM = `(root, key) => {
 }`;
 
 /**
- * In the page, `(root, key, steps) => [...]`: every surge of the beam marked
+ * In the page, `(root, key, steps, half) => [...]`: every surge of the beam marked
  * `data-flow-beam=key` under `root` held at `steps` evenly spaced points of
- * one loop of animation time, and at each the most any blob, `half` px either
- * side of its centre (its box's), overlaps the
- * beam, px along it on screen: the beam, ends square, shows over its own length.
+ * one loop of animation time, and at each the most any surge, `half` px either
+ * side of its centre (its box's), overlaps the beam, px along it on screen.
  */
 const LOOP_OVERLAPS = `(root, key, steps, half) => {
     const { surges, start, end } = (${FLOW_BEAM})(root, key);
@@ -465,28 +489,20 @@ const LOOP_OVERLAPS = `(root, key, steps, half) => {
 /** The beams it checks: the short left vertical, the long bottom horizontal and the grid's diagonal. */
 const NEVER_EMPTY_BEAMS = ["solar-house", "battery-house", "grid-house"];
 
-for (const [name, powers] of [
-    // r = 0: 60 W of solar and of battery, 120 W of grid, all to the house, under the 200 W floor of the shared 11.5 kW scale.
-    ["just above idle", { solar: 60, house: 240, battery: -60, grid: 120 }],
-    // r = 1: each at the shared scale, the grid's 11.5 kW.
-    ["at the maximum", { solar: 11500, house: 34500, battery: -11500, grid: 11500 }],
-] as const) {
-    test(`${name}, a beam always has a blob overlapping it by more than 1 px, through a whole loop`, async ({ page }) => {
-        await mountSimpleCard(page, powers);
-        await settled(page);
-        // Every beam here is long enough for a whole 12 px blob.
-        const half = flowSurgeLength(100) / 2;
-        for (const key of NEVER_EMPTY_BEAMS) {
-            const { length, count, overlaps } = await page.evaluate(({ key, lookup, half }) =>
-                eval(lookup)(document.querySelector("helman-simple-card")!.shadowRoot!, key, 200, half), { key, lookup: LOOP_OVERLAPS, half });
-            expect(flowSurgeLength(length), key).toBe(2 * half);
-            expect(count, key).toBe(flowSurgeCount(length));
-            expect(overlaps, key).toHaveLength(200);
-            // At the hand-off the blob leaving and the one entering each still overlap by 1.5 px; elsewhere by more.
-            expect(Math.min(...overlaps), `${key}, ${count} surges on ${length} px`).toBeGreaterThan(1.4);
-        }
-    });
-}
+test("at the maximum, a beam always shows part of a surge's head or tail, through a whole loop", async ({ page }) => {
+    // r = 1: each at the shared scale, the grid's 11.5 kW, so every tail is the longest and fills a surge's whole path.
+    // A weaker flow's shorter tail leaves the beam between its surges dim, as the look means it to.
+    await mountSimpleCard(page, { solar: 11500, house: 34500, battery: -11500, grid: 11500 });
+    await settled(page);
+    const half = FLOW_SURGE_LENGTH / 2;
+    for (const key of NEVER_EMPTY_BEAMS) {
+        const { length, count, overlaps } = await page.evaluate(({ key, lookup, half }) =>
+            eval(lookup)(document.querySelector("helman-simple-card")!.shadowRoot!, key, 200, half), { key, lookup: LOOP_OVERLAPS, half });
+        expect(count, key).toBe(flowSurgeCount(length));
+        expect(overlaps, key).toHaveLength(200);
+        expect(Math.min(...overlaps), `${key}, ${count} surges on ${length} px`).toBeGreaterThan(1);
+    }
+});
 
 // ── Speed on screen ──────────────────────────────────────────────────────────
 
@@ -554,15 +570,16 @@ test("at the same power, a short beam and a long one pulse at the same rhythm", 
     for (const beam of [solar, battery]) {
         expectSpeed(beam.speed, expected);
         expect(beam.count).toBe(flowSurgeCount(beam.length));
-        // A surge passes any point once per loop over the count: about every 40 px of travel.
+        // A surge passes any point once per loop over the count: about every 42 px of travel, within a
+        // whole count's rounding, 31.5 – 52.5 px on a beam that carries two or more.
         const spacing = beam.speed * beam.loopMs / 1000 / beam.count;
-        expect(spacing).toBeGreaterThan(30);
-        expect(spacing).toBeLessThan(50);
+        expect(spacing).toBeGreaterThan(31);
+        expect(spacing).toBeLessThan(53);
     }
-    expect(battery.count).toBeGreaterThan(solar.count);
+    // Not twice as often on the short beam: the intervals differ by no more than that rounding.
     const interval = (beam: typeof solar) => beam.loopMs / beam.count;
-    expect(interval(battery) / interval(solar)).toBeGreaterThan(0.75);
-    expect(interval(battery) / interval(solar)).toBeLessThan(1.33);
+    expect(interval(battery) / interval(solar)).toBeGreaterThan(0.6);
+    expect(interval(battery) / interval(solar)).toBeLessThan(1.67);
 });
 
 test("a stronger flow moves quicker on screen than a weaker one, even when the weaker one's beam is shorter", async ({ page }) => {
@@ -605,46 +622,41 @@ test("a beam the layout resizes is measured again, and its surges keep their px/
     }
 });
 
-// ── The blob on screen ───────────────────────────────────────────────────────
+// ── The surge on screen ──────────────────────────────────────────────────────
 
 /**
  * In the page, `(root, key, time) => ...`: the first surge of the beam marked
  * `data-flow-beam=key` under `root`, held at `time` ms of its animation, and
- * its blob on screen: its centre's place along the beam, px from its start,
- * the beam's length, its axes (the blob's own x and y, its half length and
- * half thickness, as vectors on screen), the beam's angle on screen, and its
- * mask's half thickness and line cap.
+ * its pulse on screen: its centre's place along the beam, px from its start,
+ * the beam's length, its axes (the pulse's own x and y, its half length and
+ * half thickness, as vectors on screen), the beam's angle on screen and its
+ * width.
  */
-const HELD_BLOB = `(root, key, time) => {
-    const { surges, start, end } = (${FLOW_BEAM})(root, key);
+const HELD_PULSE = `(root, key, time) => {
+    const { beam, surges, start, end } = (${FLOW_BEAM})(root, key);
     const surge = surges[0];
     const animation = surge.getAnimations()[0];
     animation.pause();
     animation.currentTime = time;
-    const blob = surge.firstElementChild;
-    const ctm = blob.getScreenCTM();
-    const rx = blob.rx.baseVal.value;
-    const ry = blob.ry.baseVal.value;
-    const cx = blob.cx.baseVal.value;
-    const cy = blob.cy.baseVal.value;
-    const at = (x, y) => new DOMPoint(cx + x, cy + y).matrixTransform(ctm);
+    const pulse = surge.firstElementChild;
+    const ctm = pulse.getScreenCTM();
+    const box = pulse.getBBox();
+    const at = (x, y) => new DOMPoint(box.x + box.width / 2 + x, box.y + box.height / 2 + y).matrixTransform(ctm);
     const centre = at(0, 0);
     const [dx, dy] = [end.x - start.x, end.y - start.y];
     const length = Math.hypot(dx, dy);
     const axis = (point) => [point.x - centre.x, point.y - centre.y];
-    const mask = root.querySelector('mask[id$="-' + key + '-mask"] line');
     return {
         along: ((centre.x - start.x) * dx + (centre.y - start.y) * dy) / length,
         length,
-        x: axis(at(rx, 0)),
-        y: axis(at(0, ry)),
+        x: axis(at(box.width / 2, 0)),
+        y: axis(at(0, box.height / 2)),
         angle: Math.atan2(dy, dx),
-        halfThickness: Number(mask.getAttribute("stroke-width")) / 2,
-        linecap: getComputedStyle(mask).strokeLinecap,
+        width: Number(beam.getAttribute("stroke-width")),
     };
 }`;
 
-test("on an overlay stretched one way, a diagonal blob lies along its beam and every blob is as thick as its mask", async ({ page }) => {
+test("on an overlay stretched one way, a diagonal pulse lies along its beam, a pixel wider than it", async ({ page }) => {
     // Battery to the house along the bottom, and the grid to the house down the diagonal.
     await mountSimpleCard(page, { solar: 0, house: 3000, battery: -1500, grid: 1500 });
     await page.evaluate(async () => {
@@ -661,20 +673,20 @@ test("on an overlay stretched one way, a diagonal blob lies along its beam and e
     await settled(page);
     for (const key of ["battery-house", "grid-house"]) {
         // Held half-way through its crossing, its centre on the beam.
-        const blob = await page.evaluate(({ key, lookup }) => {
+        const pulse = await page.evaluate(({ key, lookup }) => {
             return eval(lookup)(document.querySelector("helman-simple-card")!.shadowRoot!, key, 500);
-        }, { key, lookup: HELD_BLOB });
+        }, { key, lookup: HELD_PULSE });
         const norm = ([x, y]: number[]) => Math.hypot(x, y);
         // Its long axis runs along the beam on screen, and its short one square to it: not sheared.
-        expect(Math.atan2(blob.x[1], blob.x[0]), key).toBeCloseTo(blob.angle, 2);
-        expect((blob.x[0] * blob.y[0] + blob.x[1] * blob.y[1]) / norm(blob.x) / norm(blob.y), key).toBeCloseTo(0, 3);
-        // As long as a blob, and as thick as the mask it shows through.
-        expect(norm(blob.x), key).toBeCloseTo(flowSurgeLength(blob.length) / 2, 1);
-        expect(norm(blob.y), key).toBeCloseTo(blob.halfThickness, 1);
+        expect(Math.atan2(pulse.x[1], pulse.x[0]), key).toBeCloseTo(pulse.angle, 2);
+        expect((pulse.x[0] * pulse.y[0] + pulse.x[1] * pulse.y[1]) / norm(pulse.x) / norm(pulse.y), key).toBeCloseTo(0, 3);
+        // As long as a surge's path, and a pixel wider than its beam.
+        expect(norm(pulse.x), key).toBeCloseTo(FLOW_SURGE_LENGTH / 2, 1);
+        expect(norm(pulse.y), key).toBeCloseTo((pulse.width + 1) / 2, 1);
     }
 });
 
-test("at the strongest flow a blob enters just overlapping its beam's square start and leaves just overlapping its end", async ({ page }) => {
+test("a pulse enters wholly before its beam's start and leaves wholly past its end", async ({ page }) => {
     // Far over solar's 5 kW: to the grid along the top, down the left to the house and across the diagonal to the battery, each at r = 1.
     await mountSimpleCard(page, { solar: 45000, house: 15000, battery: 15000, grid: -15000 });
     await settled(page);
@@ -683,50 +695,91 @@ test("at the strongest flow a blob enters just overlapping its beam's square sta
             const root = document.querySelector("helman-simple-card")!.shadowRoot!;
             // The first surge starts its loop at once: its animation at 0 ms is the start of a crossing, at 1000 ms its end.
             return [0, 999.99].map((time) => eval(lookup)(root, key, time));
-        }, { key, lookup: HELD_BLOB });
-        const half = flowSurgeLength(first.length) / 2;
-        // The mask ends square at the beam's ends, so the beam shows a surge over its own length and no further.
-        expect(first.linecap, key).toBe("butt");
-        // It starts with 1.5 px of its blob over the start, and ends with as much over the end: the next one enters as it leaves.
-        expect(first.along, key).toBeCloseTo(-flowSurgeLead(first.length), 1);
-        expect(first.along + half, key).toBeCloseTo(1.5, 1);
-        expect(last.along - half, key).toBeCloseTo(last.length - 1.5, 1);
+        }, { key, lookup: HELD_PULSE });
+        const half = FLOW_SURGE_LENGTH / 2;
+        // Its head's tip touches the start as it enters, and its longest tail's end leaves the end: the beam shows all of it.
+        expect(first.along + half, key).toBeCloseTo(0, 1);
+        expect(last.along - half, key).toBeCloseTo(last.length, 1);
     }
 });
 
-test("every beam ends straight and square: butt caps on the simple card, square arrow ends, and nothing added at an end", async ({ page }) => {
+test("on the simple card every beam, its bloom, body and surges, fades out at both ends under one mask, the surges in a group of their own", async ({ page }) => {
     // Solar to the grid along the top, down the left to the house and across the overlay's diagonal to the battery.
     await mountSimpleCard(page, { solar: 6500, house: 900, battery: 3200, grid: -2400 });
-    await addArrows(page, [8000, 1000], 25 * 230 * 3);
     await settled(page);
-    const ends = await page.evaluate(() => {
+    const beams = await page.evaluate((lookup) => {
         const root = document.querySelector("helman-simple-card")!.shadowRoot!;
-        const arrows = document.querySelector("power-flow-arrows")!.shadowRoot!;
-        return {
-            caps: [...root.querySelectorAll<SVGLineElement>(".flow-bloom, .flow-beam, .flow-core, mask line")].map((line) => getComputedStyle(line).strokeLinecap),
-            beams: root.querySelectorAll("line[data-flow-beam]").length,
-            // A beam is its bloom, its body and its core, and its surges' mask: nothing more is drawn at its ends.
-            lines: root.querySelectorAll("line").length,
-            arrows: [...arrows.querySelectorAll<HTMLElement>(".animated-arrow")].map((arrow) =>
-                [arrow, ...arrow.querySelectorAll<HTMLElement>("*")].map((el) => getComputedStyle(el).borderTopLeftRadius + " " + getComputedStyle(el).borderBottomRightRadius)),
-            arrowChildren: [...arrows.querySelectorAll<HTMLElement>(".animated-arrow .body")].map((body) => [...body.children].map((child) => child.className)),
-        };
-    });
-    expect(ends.caps.length).toBeGreaterThan(10);
-    expect(ends.caps.every((cap) => cap === "butt"), ends.caps.join()).toBe(true);
-    expect(ends.beams).toBe(3);
-    expect(ends.lines).toBe(4 * ends.beams);
-    expect(ends.arrows).toHaveLength(2);
-    for (const radii of ends.arrows) expect(radii.every((radius) => radius === "0px 0px"), radii.join()).toBe(true);
-    for (const children of ends.arrowChildren) expect(children).toEqual(["segments", "core"]);
+        return [...root.querySelectorAll<SVGLineElement>("line[data-flow-beam]")].map((body) => {
+            const key = body.dataset.flowBeam!;
+            const { start, end } = eval(lookup)(root, key);
+            const group = body.closest("g[mask]")!;
+            // The static group and, after it, the animated one, both under the beam's mask.
+            const groups = [group, group.nextElementSibling!].filter((each) => each.getAttribute("mask") === group.getAttribute("mask"));
+            const mask = root.querySelector(`#${CSS.escape(group.getAttribute("mask")!.slice(5, -1))} line`)!;
+            const fade = root.querySelector(`#${CSS.escape(mask.getAttribute("stroke")!.slice(5, -1))}`)!;
+            const coordinates = (line: Element) => ["x1", "y1", "x2", "y2"].map((name) => line.getAttribute(name));
+            return {
+                key,
+                length: Math.hypot(end.x - start.x, end.y - start.y),
+                masked: groups.map((each) => [...new Set([...each.children].map((child) => child.getAttribute("class") ?? child.localName))]),
+                surges: groups[1]?.querySelectorAll('[data-beat="surge"]').length,
+                lines: [...group.querySelectorAll("line"), mask].map((line) => getComputedStyle(line).strokeLinecap),
+                // The fade runs from the beam's start to its end, as the mask's line does.
+                runs: [coordinates(fade), coordinates(mask)].map((each) => each.join()),
+                body: coordinates(body).join(),
+                units: fade.getAttribute("gradientUnits"),
+                stops: [...fade.children].map((stop) => [Number(stop.getAttribute("offset")), Number(stop.getAttribute("stop-opacity"))]),
+            };
+        });
+    }, FLOW_BEAM);
+    expect(beams.map(({ key }) => key)).toEqual(["solar-grid", "solar-house", "solar-battery"]);
+    for (const beam of beams) {
+        // The bloom and the body, and beside them the surges alone, under the one mask.
+        expect(beam.masked, beam.key).toEqual([["flow-bloom", "flow-beam"], ["flow-surge"]]);
+        expect(beam.surges, beam.key).toBe(flowSurgeCount(beam.length));
+        expect(beam.runs, beam.key).toEqual([beam.body, beam.body]);
+        expect(beam.units, beam.key).toBe("userSpaceOnUse");
+        // Clear at both ends, whole across the middle, over 10 px or 0.3 of a short beam: the card measured it on its own.
+        const fade = flowFadeShare(beam.length);
+        expect(beam.stops.map(([, opacity]) => opacity), beam.key).toEqual([0, 1, 1, 0]);
+        expect(beam.stops.map(([offset]) => offset), beam.key).toEqual([0, fade, 1 - fade, 1].map((offset) => expect.closeTo(offset, 2)));
+        // Full width to the end: no cap, round or square, past it.
+        expect(beam.lines.every((cap) => cap === "butt"), beam.key).toBe(true);
+    }
 });
 
-test("a wide surge stays inside its own column, however narrow the columns are", async ({ page }) => {
-    // Eight consumers at the maximum in a phone-width row: each column narrower than a full surge's 49 px.
+test("on the helman card every arrow ends square, its pulses clipped to its ends", async ({ page }) => {
     await page.setContent(PAGE);
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("power-flow-arrows"));
-    await page.evaluate(() => { document.getElementById("stage")!.style.width = "320px"; });
+    await addArrows(page, [8000, 1000], 25 * 230 * 3);
+    await settled(page);
+    const ends = await page.evaluate(() => {
+        const arrows = document.querySelector("power-flow-arrows")!.shadowRoot!;
+        return [...arrows.querySelectorAll<HTMLElement>(".animated-arrow")].map((arrow) => {
+            const box = arrow.getBoundingClientRect();
+            const clip = arrow.querySelector<HTMLElement>(".surges")!;
+            return {
+                radii: [arrow, ...arrow.querySelectorAll<HTMLElement>(".body, .body *")].map((el) => getComputedStyle(el).borderTopLeftRadius + " " + getComputedStyle(el).borderBottomRightRadius),
+                children: [...arrow.querySelector(".body")!.children].map((child) => child.className),
+                clip: { overflow: getComputedStyle(clip).overflow, top: clip.getBoundingClientRect().top - box.top, bottom: clip.getBoundingClientRect().bottom - box.bottom },
+            };
+        });
+    });
+    expect(ends).toHaveLength(2);
+    for (const { radii, children, clip } of ends) {
+        expect(radii.every((radius) => radius === "0px 0px"), radii.join()).toBe(true);
+        expect(children).toEqual(["segments"]);
+        expect(clip).toEqual({ overflow: "hidden", top: 0, bottom: 0 });
+    }
+});
+
+test("a surge stays inside its own column, however narrow the columns are", async ({ page }) => {
+    // Eight consumers at the maximum in a very narrow row: each column narrower than a full surge's 9 px.
+    await page.setContent(PAGE);
+    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
+    await page.waitForFunction(() => !!customElements.get("power-flow-arrows"));
+    await page.evaluate(() => { document.getElementById("stage")!.style.width = "100px"; });
     await addArrows(page, Array(8).fill(11_500), 11_500);
     const boxes = await page.evaluate(() => {
         const root = document.querySelector("power-flow-arrows")!.shadowRoot!;
@@ -850,7 +903,7 @@ test("a power change retunes the rate in place: no animation restarts and no sur
     // And the change did reach the page: the weak flow is brighter.
     const opacity = await page.evaluate(() =>
         Number(getComputedStyle(document.querySelector("helman-simple-card")!.shadowRoot!.querySelector('line[data-flow="grid-house"]')!).opacity));
-    expect(opacity).toBeCloseTo(0.25 + 0.65 * flowLevel(flowRatio(1600, 11500)), 5);
+    expect(opacity).toBeCloseTo(0.14 + 0.3 * flowLevel(flowRatio(1600, 11500)), 5);
 });
 
 test.describe("reduced motion", () => {
@@ -876,7 +929,7 @@ test.describe("reduced motion", () => {
                 arrowSurges: [...arrows.querySelectorAll(".band")].map((band) => getComputedStyle(band).transform),
             };
         });
-        expect(still.body).toBeGreaterThan(0.25);
+        expect(still.body).toBeGreaterThan(0.14);
         expect(still.halos.length).toBeGreaterThan(0);
         for (const opacity of still.halos) expect(opacity).toBeCloseTo(0.6, 5);
         // Spread along the beam: every surge rests somewhere different.
@@ -885,10 +938,32 @@ test.describe("reduced motion", () => {
         expect(still.surges.every((transform) => transform !== "none")).toBe(true);
         expect(new Set(still.surges).size).toBe(still.surges.length);
         expect(new Set(still.arrowSurges).size).toBe(still.arrowSurges.length);
+
+        // Every resting surge's head, half a surge ahead of its centre, lies on its beam.
+        const heads = await page.evaluate(({ lookup, half }) => {
+            const root = document.querySelector("helman-simple-card")!.shadowRoot!;
+            const arrows = document.querySelector("power-flow-arrows")!.shadowRoot!;
+            return [root, arrows].flatMap((each) => [...each.querySelectorAll<HTMLElement | SVGElement>("[data-flow-beam]")].flatMap((beam) => {
+                const key = beam.dataset.flowBeam!;
+                const { surges, start, end } = eval(lookup)(each, key);
+                const [dx, dy] = [end.x - start.x, end.y - start.y];
+                const length = Math.hypot(dx, dy);
+                return surges.map((surge: Element) => {
+                    const box = surge.getBoundingClientRect();
+                    const along = ((box.x + box.width / 2 - start.x) * dx + (box.y + box.height / 2 - start.y) * dy) / length;
+                    return { key, length, head: along + half };
+                });
+            }));
+        }, { lookup: FLOW_BEAM, half: FLOW_SURGE_LENGTH / 2 });
+        expect(heads.length).toBe(still.surges.length + still.arrowSurges.length);
+        for (const { key, length, head } of heads) {
+            expect(head, key).toBeGreaterThan(0);
+            expect(head, key).toBeLessThan(length);
+        }
     });
 });
 
-test("a light theme drops the white from the hot core", async ({ page }) => {
+test("a light theme drops the white from the pulse head", async ({ page }) => {
     await mountSimpleCard(page, NIGHT_CHARGE, false);
     const mix = await page.evaluate(() => {
         const card = document.querySelector("helman-simple-card")!;
@@ -1101,7 +1176,7 @@ test("the helman card draws its arrows against the largest node maximum, and ign
     expect(solar.width).toBeCloseTo(flowThickness(flowRatio(103, 11500)), 3);
     expect(grid.width).toBeCloseTo(flowThickness(flowRatio(2300, 11500)), 3);
     expect(solar.width).toBeLessThan(grid.width);
-    // Each surge is drawn as wide as its bubble and halo, the 103 W one the narrower.
+    // Each surge is drawn a pixel wider than its beam, the 103 W one the narrower.
     expect(solar.surge).toBeCloseTo(flowBeam(flowRatio(103, 11500), "red").surgeWidth, 3);
     expect(grid.surge).toBeCloseTo(flowBeam(flowRatio(2300, 11500), "red").surgeWidth, 3);
     expect(solar.surge).toBeLessThan(grid.surge);
@@ -1117,31 +1192,34 @@ test("the simple card draws a 103 W flow thinner, with a narrower surge, than a 
         const root = document.querySelector("helman-simple-card")!.shadowRoot!;
         return Object.fromEntries(["solar-house", "grid-house"].map((flow) => [flow, {
             width: Number(root.querySelector(`line[data-flow="${flow}"]`)!.getAttribute("stroke-width")),
-            surge: Number(root.querySelector(`mask[id$="-${flow}-mask"] line`)!.getAttribute("stroke-width")),
+            // A pulse is drawn along its beam: its smaller side is across it.
+            surge: Math.min(...(({ width, height }) => [width, height])(root.querySelector<SVGRectElement>(`g[mask*="-${flow}-mask"] [data-beat="surge"] rect`)!.getBBox())),
         }]));
     });
     const { "solar-house": solar, "grid-house": grid } = beams;
     expect(solar.width).toBeCloseTo(flowThickness(flowRatio(103, 11500)), 3);
     expect(grid.width).toBeCloseTo(flowThickness(flowRatio(2300, 11500)), 3);
     expect(solar.width).toBeLessThan(grid.width);
-    // Each surge's mask is as wide as its bubble and halo, the 103 W one the narrower.
+    // Each surge is a pixel wider than its beam, the 103 W one the narrower.
     expect(solar.surge).toBeCloseTo(flowBeam(flowRatio(103, 11500), "red").surgeWidth, 3);
     expect(grid.surge).toBeCloseTo(flowBeam(flowRatio(2300, 11500), "red").surgeWidth, 3);
     expect(solar.surge).toBeLessThan(grid.surge);
 });
 
 test("an edge's surges are spread evenly over one crossing, at their flow's speed over their beam's length", () => {
-    // The faintest flow on a 28 px beam: one surge, at 3 px/s over 28 + 12 - 3 px.
-    expect(flowSurges(0, 28)).toEqual({
+    // Resting, each one's head sits at its even share of the beam: its head covers one crossing over its path.
+    const rest = (share: number, length: number) => expect.closeTo(share * length / (length + 41), 6);
+    // The faintest flow on a 5 px beam: one surge, at 3 px/s over 5 + 41 px, its head resting mid-beam.
+    expect(flowSurges(0, 5)).toEqual({
         count: 1,
-        rate: 0.0811,
-        surges: [{ delay: "0ms", rest: 0.5 }],
+        rate: 0.0652,
+        surges: [{ delay: "0ms", rest: rest(0.5, 5) }],
     });
-    // The strongest on a 107 px beam: three, a third of the loop apart, at 60 px/s over 107 + 12 - 3 px.
-    expect(flowSurges(1, 107)).toEqual({
+    // The strongest on a 85 px beam: three, a third of the loop apart, at 60 px/s over 85 + 41 px.
+    expect(flowSurges(1, 85)).toEqual({
         count: 3,
-        rate: 0.517,
-        surges: [{ delay: "0ms", rest: 0.25 }, { delay: "-333ms", rest: 0.5 }, { delay: "-667ms", rest: 0.75 }],
+        rate: 0.476,
+        surges: [{ delay: "0ms", rest: rest(0.25, 85) }, { delay: "-333ms", rest: rest(0.5, 85) }, { delay: "-667ms", rest: rest(0.75, 85) }],
     });
     // A beam not measured yet, or not laid out, carries none.
     expect(flowSurges(1, undefined)).toEqual({ count: 0, rate: 0, surges: [] });
