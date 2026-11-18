@@ -46,7 +46,9 @@ async function mountCard(page: Page, config: Record<string, unknown>): Promise<v
 
 /**
  * Give the day a house-actual series with a two-slot hole, and draw it at hour
- * width so the 10:00 column is short of two of its four readings.
+ * width so the 13:00 column is short of two of its four readings. After noon,
+ * the fixed clock's hour, so today's window -- which starts an hour before now
+ * -- has it on screen.
  *
  * Written rather than filtered: the fake backend serves this series empty, so
  * there is nothing to punch a hole in until there is a series.
@@ -60,7 +62,7 @@ async function punchHoleAtHourWidth(page: Page): Promise<void> {
         const payload = JSON.parse(JSON.stringify(el._payload));
         const points = [];
         for (let minutes = 0; minutes < 1440; minutes += 15) {
-            if (minutes === 615 || minutes === 630) continue; // 10:15, 10:30
+            if (minutes === 795 || minutes === 810) continue; // 13:15, 13:30
             const hh = String(Math.floor(minutes / 60)).padStart(2, "0");
             const mm = String(minutes % 60).padStart(2, "0");
             points.push({ slot: `${hh}:${mm}`, valueWh: -200 });

@@ -547,15 +547,15 @@ export type DayWindow = { startMinutes: number; endMinutes: number };
  * threshold to the hour past the last. Cropping to this window fills the plot
  * with the daylight curve instead of squeezing it between empty night hours on
  * either side. With no solar above the threshold anywhere (a fully clouded
- * winter day, or no forecast yet) it falls back to the whole day so the other
- * series still have somewhere to sit.
+ * winter day, or no forecast yet) there is none, and the caller falls back to
+ * the whole day so the other series still have somewhere to sit.
  */
 function solarWindow(
   payload: InspectorPayload,
   thresholdW: number,
   hidden: ReadonlySet<SeriesKey>,
   enabled: readonly SeriesKey[] | undefined,
-): { start: number; end: number } {
+): { start: number; end: number } | null {
   const threshold = Number.isFinite(thresholdW) ? thresholdW : 100;
   let first = Number.POSITIVE_INFINITY;
   let last = Number.NEGATIVE_INFINITY;
@@ -575,18 +575,27 @@ function solarWindow(
     }
   }
   if (!Number.isFinite(first) || !Number.isFinite(last)) {
-    return { start: 0, end: MINUTES_PER_DAY };
+    return null;
   }
   const start = Math.max(0, Math.floor(first / 60) * 60);
   // `last` is the start of a slot, so include the hour it falls in.
   const end = Math.min(MINUTES_PER_DAY, (Math.floor(last / 60) + 1) * 60);
-  return end > start ? { start, end } : { start: 0, end: MINUTES_PER_DAY };
+  return end > start ? { start, end } : null;
 }
+
+/** How far before the current hour today's following window starts. */
+const FOLLOW_LEAD_MINUTES = 60;
 
 /**
  * The window a day opens at: its solar hours in the daylight-only view, the
  * whole day otherwise. A day navigation lands here, and a drag that hands the
  * majority to another day takes that day's width from here too.
+ *
+ * `nowMinutes` is the clock's minute on this day, for today only. Today's sun
+ * hours then slide with it, a whole hour at a time: they start an hour before
+ * the current one, never before sunrise, and keep their width -- so the chart
+ * shows what is still ahead, past sunset into the night and the next morning.
+ * A day with no sun keeps the whole day and does not follow.
  */
 export function defaultDayWindow(
   payload: InspectorPayload,
@@ -594,11 +603,16 @@ export function defaultDayWindow(
   thresholdW: number,
   hidden: ReadonlySet<SeriesKey>,
   enabled: readonly SeriesKey[] | undefined,
+  nowMinutes: number | null = null,
 ): DayWindow {
-  const { start, end } = daylightOnly
-    ? solarWindow(payload, thresholdW, hidden, enabled)
-    : { start: 0, end: MINUTES_PER_DAY };
-  return { startMinutes: start, endMinutes: end };
+  const solar = daylightOnly ? solarWindow(payload, thresholdW, hidden, enabled) : null;
+  if (solar === null) {
+    return { startMinutes: 0, endMinutes: MINUTES_PER_DAY };
+  }
+  const start = nowMinutes === null
+    ? solar.start
+    : Math.max(solar.start, Math.floor(nowMinutes / 60) * 60 - FOLLOW_LEAD_MINUTES);
+  return { startMinutes: start, endMinutes: start + solar.end - solar.start };
 }
 
 /**

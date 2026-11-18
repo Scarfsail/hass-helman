@@ -19,7 +19,8 @@
 ## Controls
 
 - **15 / 30 / 60** set the slot width of the chart. **D** shows a month of days and **M** a year of months.
-- **☀** crops the chart to the hours with sun.
+- **☀** crops the chart to the hours with sun. For today, the chart starts an hour before now (never before sunrise), keeps that width and moves on with the clock every hour, so it shows what is still ahead. After sunset it runs on into the night and tomorrow's morning. At midnight it moves to the new day.
+- **Drag** the chart sideways to move through time, past midnight into the neighbouring day. A drag stops today's view from following now; press today's pill to bring it back. A dragged view keeps its place when you switch 15 / 30 / 60, or go to D or M and back to the same day.
 - **⟳** reloads.
 - Tap a slot for its detail: every value of that slot, and for solar, the correction factor applied.
 

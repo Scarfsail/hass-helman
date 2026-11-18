@@ -5,6 +5,7 @@ import {
     chartLayout,
     dayCoverage,
     dayHasSeries,
+    defaultDayWindow,
     socBars,
     type SeriesKey,
 } from "../cards/helman-solar-inspector/inspector-day-model";
@@ -202,6 +203,45 @@ test.describe("chartLayout", () => {
         const layout = layoutOf(720, true, 100, new Set<SeriesKey>(["corrected"]));
         expect([layout.dayStartMinutes, layout.dayEndMinutes]).toEqual([0, 1440]);
         expect(layout.maxKw).toBe(1);
+    });
+});
+
+test.describe("defaultDayWindow", () => {
+    // Sun from 07:00 to the end of the 16:00 hour: a ten-hour window, 07:00-17:00.
+    const sunny = inspectorDay({
+        series: { corrected: [wh("07:00", 500), wh("12:00", 500), wh("16:45", 500)] },
+    });
+    const windowAt = (nowMinutes: number | null, daylightOnly = true, payload = sunny) => {
+        const { startMinutes, endMinutes } = defaultDayWindow(
+            payload, daylightOnly, 100, NONE_HIDDEN, ALL_ENABLED, nowMinutes,
+        );
+        return [startMinutes, endMinutes];
+    };
+
+    test("with no clock the day opens at its sun hours", () => {
+        expect(windowAt(null)).toEqual([420, 1020]);
+    });
+
+    test("today starts an hour before the current one, never before sunrise, and keeps the width", () => {
+        // Before sunrise: the sun hours as they are.
+        expect(windowAt(5 * 60)).toEqual([420, 1020]);
+        // 07:59 is still the 07:00 hour.
+        expect(windowAt(7 * 60 + 59)).toEqual([420, 1020]);
+        // Mid-day, snapped to the hour: 13:40 is 12:00 onwards.
+        expect(windowAt(13 * 60 + 40)).toEqual([720, 1320]);
+        // After sunset it slides on into the night and the next morning.
+        expect(windowAt(19 * 60 + 5)).toEqual([1080, 1680]);
+        // Near midnight.
+        expect(windowAt(23 * 60 + 50)).toEqual([1320, 1920]);
+    });
+
+    test("a day with no sun keeps the whole day and ignores the clock", () => {
+        const clouded = inspectorDay({ series: { corrected: [wh("12:00", 5)] } });
+        expect(windowAt(15 * 60, true, clouded)).toEqual([0, 1440]);
+    });
+
+    test("with daylight-only off the whole day ignores the clock", () => {
+        expect(windowAt(15 * 60, false)).toEqual([0, 1440]);
     });
 });
 

@@ -127,6 +127,7 @@ import {
   snapWindow,
   windowAround,
 } from "./pan-window";
+import { nowMinutesOnDay } from "./now-marker";
 import {
   monthBounds,
   parseOrToday as navigationParseOrToday,
@@ -267,6 +268,24 @@ function sharedMoneyScale(
   return { maxUp: Math.max(own.maxUp, neighbour.maxUp), maxDown: Math.max(own.maxDown, neighbour.maxDown) };
 }
 
+/**
+ * Today's own window at `nowMinutes`. One that reaches past midnight is held
+ * inside the days navigation can reach: with no tomorrow to show, it stops at
+ * today's 24:00.
+ */
+function followWindow(
+  payload: InspectorPayload,
+  daylightOnly: boolean,
+  thresholdW: number,
+  hidden: ReadonlySet<SeriesKey>,
+  enabled: readonly SeriesKey[] | undefined,
+  nowMinutes: number,
+  range: NavigationRange | null,
+): DayWindow {
+  const own = defaultDayWindow(payload, daylightOnly, thresholdW, hidden, enabled, nowMinutes);
+  return overhangSide(own) === 0 ? own : clampWindow(own, payload.date, range);
+}
+
 export class HelmanSolarInspector extends LitElement {
   @property({ attribute: false }) hass?: HomeAssistant;
   /** Solar power (W) at or above which a slot counts as carrying sun energy. */
@@ -360,8 +379,9 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * The minutes the day view spans, relative to the selected day's midnight,
    * or null for the day's own window: its solar hours in the daylight-only
-   * view, the whole day otherwise. A drag sets it and may take it below 0 or
-   * past 1440; every day navigation puts it back to null.
+   * view, the whole day otherwise -- and for today, sun hours that follow the
+   * clock (see `_drawnWindow`). A drag sets it and may take it below 0 or past
+   * 1440, which stops the following; every day navigation puts it back to null.
    */
   @state() private _window: DayWindow | null = null;
   /** A drag is moving the window: the cursor grips, and hover stands down. */
@@ -571,6 +591,7 @@ export class HelmanSolarInspector extends LitElement {
   private readonly _coverageOf = memoOne(dayCoverage);
   private readonly _stacksOf = memoOne(buildStacks);
   private readonly _layoutOf = memoOne(chartLayout);
+  private readonly _followWindowOf = memoOne(followWindow);
   private readonly _stripGeometryOf = memoOne(stripGeometry);
   private readonly _socBarsOf = memoOne(socBars);
   private readonly _selectedMinutesOf = memoOne(selectedMinutes);
@@ -1041,6 +1062,25 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
+   * The window the day view draws for the selected day's `payload`: a dragged
+   * one as it was left, else today's own window following the clock, else null
+   * for the day's own. Following is not state of its own -- it is `_window`
+   * being null on today, so a drag stops it and a day pill re-arms it.
+   */
+  private _drawnWindow(payload: InspectorPayload | undefined): DayWindow | null {
+    if (this._window !== null || payload === undefined) return this._window;
+    const nowMinutes = nowMinutesOnDay(payload.date, this._haTimeZone() ?? "UTC", this._nowMs);
+    if (nowMinutes === null) return null;
+    // Keyed on the hour, the window's own step, so the ticks in between hand the
+    // layouts the same window and rebuild nothing. Measured on the re-bucketed
+    // view, as `chartLayout` measures every other day's own window.
+    return this._followWindowOf(
+      this._viewOf(payload, this._slotMinutes), this._daylightOnly, this.daylightThresholdW, this._hiddenSeries, this.chartSeries,
+      Math.floor(nowMinutes / 60) * 60, this._dayRange,
+    );
+  }
+
+  /**
    * Derive the pill window once per cycle, before anything renders.
    *
    * The window is a render *input* — the pills are handed it — so it cannot be
@@ -1053,7 +1093,20 @@ export class HelmanSolarInspector extends LitElement {
    * actually lands.
    */
   protected willUpdate(_changed: PropertyValues<this>) {
+    const previousToday = this._todayKey;
     this._todayKey = this._todayIso();
+    // A view following the clock follows it into the new day, as a press of
+    // that day's pill would. A dragged window stays on the day it was left on.
+    // Here rather than in the clock tick: whichever update first sees the new
+    // day -- a hass update often beats the tick -- moves `_todayKey`, so this
+    // is the one place the old day is still known.
+    if (previousToday !== "" && previousToday !== this._todayKey && this._viewMode === "day"
+      && this._daylightOnly && this._window === null && this._selectedDate === previousToday) {
+      this._nowMs = Date.now();
+      this._calendarSelection = this._todayKey;
+      this._selectedDate = this._todayKey;
+      void this._load();
+    }
     // Hidden while the reader is in one, the aggregate view would leave no
     // stop to get back out by.
     if (_changed.has("hideAggregateViews") && this.hideAggregateViews && this._viewMode !== "day") {
@@ -1701,11 +1754,17 @@ export class HelmanSolarInspector extends LitElement {
       // The day the aggregate views left selected, not whatever `_selectedDate`
       // happens to hold: span navigation parks it on a span start, so arriving
       // from M without this opened the 1st of January.
-      this._selectedDate = this._dayForMinutesStop();
+      const date = this._dayForMinutesStop();
+      // The same day keeps a dragged window, through D or M and back too: that
+      // is a change of scale, not a navigation. Snapped to the new grid, so a
+      // 15-minute start does not cut a 60-minute column.
+      const kept = date === this._selectedDate ? this._window : null;
+      this._selectedDate = date;
       this._clearChartFocus();
       this._window = null;
       this._viewMode = "day";
       this._setSlotMinutes(stop.minutes);
+      if (kept !== null) this._placeWindow(snapWindow(kept, stop.minutes));
       this._ensureDayLoaded();
       return;
     }
@@ -1714,6 +1773,9 @@ export class HelmanSolarInspector extends LitElement {
     // `_viewMode` to decide what a span is.
     const carried = this._spanForViewStop(stop.mode);
     this._viewMode = stop.mode;
+    // A dragged window belongs to its day: once the date moves off it, nothing
+    // later may place it on another.
+    if (carried.date !== this._selectedDate) this._window = null;
     this._selectedDate = carried.date;
     this._bucketSelection = carried.bucket === null
       ? EMPTY_SLOT_SELECTION
@@ -1828,6 +1890,8 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     this._viewMode = mode;
+    // As in `_selectViewStop`: the dragged window stays only on its own day.
+    if (spanKey !== this._selectedDate) this._window = null;
     this._selectedDate = spanKey;
     this._clearChartFocus();
     this._loadSpan();
@@ -2398,14 +2462,20 @@ export class HelmanSolarInspector extends LitElement {
       this._layout = null;
       this._stripGeometry = null;
     } else {
-      // The day the window reaches into, when a drag took it past midnight and
-      // that day has arrived. Only ever for the day actually selected: a stale
-      // payload kept up through a load is drawn in its own window.
-      const window = payload.date === this._selectedDate ? this._window : null;
+      // The day the window reaches into, when a drag or today's following
+      // window took it past midnight and that day has arrived. Only ever for the
+      // day actually selected: a stale payload kept up through a load is drawn
+      // in its own window.
+      const window = payload.date === this._selectedDate ? this._drawnWindow(payload) : null;
       const side = window === null ? 0 : overhangSide(window);
       const neighbourPayload = side === 0
         ? null
         : this._dayPayloads.get(addDays(this._selectedDate, side)) ?? null;
+      // The following window reaches into tomorrow with no drag to fetch it.
+      // Asked for here, once per update, and deduplicated by the loader itself.
+      if (side !== 0 && neighbourPayload === null) {
+        void this._ensureNeighbourLoaded(addDays(this._selectedDate, side));
+      }
       // The neighbour at its own native width, as `_showDayPayload` would hold
       // it once selected: an hourly day spread over 15-minute slots would read
       // four times its power, and stretch the shared axis with it.
@@ -2661,7 +2731,8 @@ export class HelmanSolarInspector extends LitElement {
     this._neighbourGeneration++;
     this._neighbourRequests.clear();
     this._neighbourFailures.clear();
-    const side = this._viewMode === "day" && this._window !== null ? overhangSide(this._window) : 0;
+    const window = this._viewMode === "day" ? this._drawnWindow(this._dayPayloads.get(this._selectedDate)) : null;
+    const side = window === null ? 0 : overhangSide(window);
     const drawnNeighbour = side === 0 ? null : addDays(this._selectedDate, side);
     const kept = [...this._dayPayloads].filter(([date]) => date === this._payloadDate || date === drawnNeighbour);
     if (kept.length !== this._dayPayloads.size) {
