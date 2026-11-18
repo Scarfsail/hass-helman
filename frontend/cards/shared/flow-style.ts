@@ -11,14 +11,16 @@ import { css, unsafeCSS } from "lit";
  * one shared maximum on every card, `flowScaleW`: the largest of the solar,
  * battery and grid `max_power`, so equal watts look equal everywhere. A flow
  * at or under the 200 W floor draws at `r` = 0, the faintest look.
- * Every cue (thickness, surge width, halo and speed, level `k`, glow size `s`
- * and glow rate) comes from `r` through one easing `t = flowEase(r)`, all
- * continuous curves, so they always agree. A surge is a bubble swelling
- * around its beam inside a soft halo in the flow's colour, an energy pulse
- * glowing past the pipe; both grow with `t`. A surge's speed is a
- * velocity on screen, px/s, the same on every edge, and its blob and the
- * spacing between surges are fixed lengths on screen, so a flow pulses at the
- * same rhythm on a short beam and a long one.
+ * Every cue (thickness, brightness, a surge's tail and speed, level `k`, glow
+ * size `s` and glow rate) comes from `r` through one easing `t = flowEase(r)`,
+ * all continuous curves, so they always agree. A beam is a slim, dim pipe; a
+ * surge is the pulse that lights it up: a hot head with a tail fading out
+ * behind it, longer the stronger the flow, painted into one gradient. A
+ * surge's speed is a velocity on screen, px/s, the same on every edge, and
+ * its path (head and longest tail) and the spacing between surges are fixed
+ * lengths on screen, so a flow pulses at the same rhythm on a short beam and
+ * a long one. The helman card's beams end square against its boxes; the
+ * simple card's fade out into their nodes, body, bloom and surges alike.
  *
  * Every edge runs its own tempo and every glow breathes at its own node's
  * rate; nothing shares a beat. What animates never carries data. The level
@@ -41,7 +43,7 @@ const GLOW_BASE_MS = 1000;
 const SURGE_SPEED = [3, 60] as const;
 
 /** How far apart an edge's surges are, px of their path on screen, about. */
-const SURGE_SPACING = 40;
+const SURGE_SPACING = 42;
 
 /** A glow's period, ms, from `t` = 0 to 1: never quicker than one breath per 1300 ms. */
 const GLOW_PERIOD_MS = [3900, 1300] as const;
@@ -55,30 +57,24 @@ const GLOW = { fade: 0.8, floor: 0.35 } as const;
 /** A glow's opacity, as a share of its level, while motion is reduced. */
 const STILL_GLOW = 0.6;
 
-/** The surge: its length, px, and the share of a short beam it may take at most. */
-const SURGE_LENGTH = 12;
-const SURGE_MAX_SHARE = 0.9;
-
 /** A beam's thickness, px: its floor, at `r` = 0, and at `r` = 1. */
-const BEAM_THICKNESS = { floor: 1.5, max: 21 } as const;
+const BEAM_THICKNESS = { floor: 1, max: 8 } as const;
 
-/** How much wider than its beam a surge's bubble is, px, from `t` = 0 to 1. */
-const SURGE_SWELL = [4, 12] as const;
-
-/** The soft halo around a surge's bubble, px each side, from `t` = 0 to 1. */
-const SURGE_HALO = [2, 8] as const;
+/** A surge's head, px along its beam, and the tail fading out behind it, px, from `t` = 0 to 1. */
+const TRAIL_HEAD = 3;
+const TRAIL_TAIL = [14, 38] as const;
 
 /**
- * How far, px, a surge's blob still overlaps its beam's end as it leaves,
- * and the next one's its start as it enters: a beam that carries one surge
- * is never empty, even at the instant it hands off.
+ * A surge's gradient along its head and tail, from the tail's end to the
+ * head's tip: where, as a share of the two, and the flow colour's strength
+ * there. The stop after `colour` is the hot head; the head's tip is clear.
  */
-const SURGE_HANDOFF = 1.5;
+const TRAIL_STOPS = { colour: [[0, 0], [0.55, 0.35], [0.86, 0.9]], hot: 0.94 } as const;
 
-/** The hot core's share of the beam's thickness. */
-const CORE_SHARE = 0.35;
+/** How far a simple-card beam fades out into its node at each end: px at most, and its share of a short beam. */
+const BEAM_FADE = { max: 10, share: 0.3 } as const;
 
-/** How much white the hot core mixes into a flow's colour, on a dark theme. */
+/** How much white the pulse head mixes into a flow's colour, on a dark theme. */
 export const FLOW_HOT_MIX = "80%";
 
 /** `cubic-bezier` control points that trace smoothstep, `3t² − 2t³`, exactly. */
@@ -125,13 +121,17 @@ export function flowSpeed(r: number): number {
     return along(SURGE_SPEED, flowEase(r));
 }
 
+/** A surge's tail, px, behind its head. */
+export function flowTail(r: number): number {
+    return along(TRAIL_TAIL, flowEase(r));
+}
+
 /**
  * How many surges are on a beam `beamLength` px long at once: one per
- * `SURGE_SPACING` px of the beam and a blob, at least one, so a blob always
- * overlaps the beam.
+ * `SURGE_SPACING` px of their crossing, at least one.
  */
 export function flowSurgeCount(beamLength: number): number {
-    return Math.max(1, Math.round((beamLength + flowSurgeLength(beamLength)) / SURGE_SPACING));
+    return Math.max(1, Math.round(flowSurgeTravel(beamLength) / SURGE_SPACING));
 }
 
 /** A node's glow period, ms. */
@@ -148,19 +148,20 @@ const rateFor = (baseMs: number, periodMs: number) => Math.floor(baseMs / period
 
 /**
  * The `playbackRate` of a surge moving at `speed` px/s along a beam
- * `beamLength` px long on screen: one loop is one crossing, its centre
- * running `flowSurgeTravel`. Rounded to three significant digits, so a slow
- * surge on a long beam never stops and is never more than 0.5 % off its
- * speed.
+ * `beamLength` px long on screen: one loop is one crossing,
+ * `flowSurgeTravel`. Rounded to three significant digits, so a slow surge on
+ * a long beam never stops and is never more than 0.5 % off its speed.
  */
 export function flowSurgeRate(speed: number, beamLength: number): number {
     return Number((SURGE_BASE_MS * speed / (flowSurgeTravel(beamLength) * 1000)).toPrecision(3));
 }
 
-/** The hot core of a flow in colour `color`. */
-export function flowHot(color: string): string {
+/** The hot pulse head of a flow in colour `color`. */
+function flowHot(color: string): string {
     return `color-mix(in srgb, white var(--helman-flow-hot-mix), ${color})`;
 }
+
+const pct = (share: number) => `${+(share * 100).toFixed(2)}%`;
 
 /** `color` at `share` (0 – 1) of its strength. */
 const tint = (color: string, share: number) => `color-mix(in srgb, ${color} ${+(share * 100).toFixed(1)}%, transparent)`;
@@ -168,110 +169,99 @@ const tint = (color: string, share: number) => `color-mix(in srgb, ${color} ${+(
 /** Everything static about one beam. */
 export interface FlowBeam {
     width: number;
-    coreWidth: number;
     bodyOpacity: number;
     /** The bloom, as `box-shadow` takes it. */
     bloom: string;
     /** The same bloom's blur radius, px, and colour, for a beam that draws it as a blurred copy of itself. */
     bloomBlur: number;
     bloomColor: string;
-    /** The surge's bubble, px across: wider than its beam, so it swells around the body. */
-    surgeThickness: number;
-    /** The bubble and its halo, px across: how wide a surge is drawn, and what its clip lets through. */
+    /** A surge's tail, px behind its head. */
+    tail: number;
+    /** A surge, px across: a pixel wider than its beam. */
     surgeWidth: number;
     surgeOpacity: number;
 }
 
-/** The surge's bubble, px across: its beam and a swell, both from `t`, so a bigger flow's is always the bigger. */
-const surgeThickness = (r: number) => flowThickness(r) + along(SURGE_SWELL, flowEase(r));
-
 export function flowBeam(r: number, color: string): FlowBeam {
     const width = flowThickness(r);
     const k = flowLevel(r);
-    const bloomBlur = +(width + 2 + 8 * k).toFixed(2);
-    const bloomColor = tint(color, 0.85 * k);
-    const bubble = surgeThickness(r);
+    const bloomBlur = +(0.6 * (width + 2 + 8 * k)).toFixed(2);
+    const bloomColor = tint(color, 0.27 * k);
     return {
         width,
-        coreWidth: width * CORE_SHARE,
-        bodyOpacity: 0.25 + 0.65 * k,
+        bodyOpacity: 0.14 + 0.3 * k,
         bloom: `0 0 ${bloomBlur}px ${bloomColor}`,
         bloomBlur,
         bloomColor,
-        surgeThickness: bubble,
-        surgeWidth: bubble + 2 * along(SURGE_HALO, flowEase(r)),
-        surgeOpacity: 0.35 + 0.65 * k,
+        tail: flowTail(r),
+        surgeWidth: width + 1,
+        surgeOpacity: 0.55 + 0.45 * k,
     };
 }
 
-/** A surge's length along a beam `beamLength` px long. */
-export function flowSurgeLength(beamLength: number): number {
-    return Math.min(SURGE_LENGTH, SURGE_MAX_SHARE * beamLength);
-}
-
-/** The same, for a beam whose length is the reference box of a CSS percentage. */
-export const FLOW_SURGE_LENGTH_CSS = `min(${SURGE_LENGTH}px, ${SURGE_MAX_SHARE * 100}%)`;
+/**
+ * A surge's length as drawn, px: its head and the longest tail, whatever its
+ * power, so its path never follows the power. A weaker flow's shorter tail
+ * leaves the back of it clear.
+ */
+export const FLOW_SURGE_LENGTH = TRAIL_HEAD + TRAIL_TAIL[1];
 
 /**
- * How far a surge's centre starts before a beam `beamLength` px long and ends
- * past it, px: half its blob, short of `SURGE_HANDOFF`, so it enters just
- * overlapping the beam's start and leaves just overlapping its end. A beam
- * shows its surges over its own length, ends square. Never below 0: on a beam
- * too short for the hand-off, a centre starts at the start and ends at the
- * end, so a crossing is never shorter than the beam.
+ * How far a surge's centre runs in one crossing of a beam `beamLength` px
+ * long, px: from its head just before the beam's start, `FLOW_SURGE_LENGTH`
+ * / 2 back, to its longest tail just past its end, as far past.
  */
-export function flowSurgeLead(beamLength: number): number {
-    return Math.max(0, flowSurgeLength(beamLength) / 2 - SURGE_HANDOFF);
-}
-
-/** How far a surge's centre runs in one crossing of a beam `beamLength` px long, px: never less than the beam. */
 export function flowSurgeTravel(beamLength: number): number {
-    return beamLength + 2 * flowSurgeLead(beamLength);
+    return beamLength + FLOW_SURGE_LENGTH;
 }
 
-/**
- * Where a surge's centre starts along a beam whose length is the reference
- * box of a CSS percentage, as a CSS length: `flowSurgeLead` back from its
- * start, against `towards` (1 or -1), the direction the beam runs in.
- */
-export function flowSurgeStartCss(towards: number): string {
-    return `calc(max(0px, ${FLOW_SURGE_LENGTH_CSS} / 2 - ${SURGE_HANDOFF}px) * ${-towards})`;
-}
-
-/** The step the bubble's share of a surge's width is rounded to in its gradient stops. */
+/** The step the tail's share of a surge is rounded to in its gradient stops. */
 const SURGE_STOP_STEP = 0.05;
 
 /**
- * The surge's soft blob across `beam.surgeWidth`, as gradient stops: offset,
- * colour. A hot bubble `beam.surgeThickness` across, its edge still lit, and
- * around it a halo in the flow's colour fading out: an energy pulse glowing
- * past the beam. Painted once into the blob, so it moves with its transform.
- * The bubble's share is rounded to `SURGE_STOP_STEP`, so a power tick
- * repaints the gradient only when the share crosses a step.
+ * A surge's gradient from the back of `FLOW_SURGE_LENGTH` to its head's tip,
+ * as stops: offset, colour, and the colour's strength. Clear behind its tail,
+ * then the tail rising in the flow's colour to the hot head, and clear again
+ * at the tip. Painted once into the surge, so it moves with its transform.
+ * The share its head and tail take is rounded to `SURGE_STOP_STEP`, so a
+ * power tick repaints the gradient only when the share crosses a step.
  */
-export function flowSurgeStops(color: string, beam: Pick<FlowBeam, "surgeThickness" | "surgeWidth">): [number, string][] {
-    const bubble = +(Math.round(beam.surgeThickness / beam.surgeWidth / SURGE_STOP_STEP) * SURGE_STOP_STEP).toFixed(4);
-    return [[0, flowHot(color)], [+(0.6 * bubble).toFixed(4), tint(color, 0.6)], [bubble, tint(color, 0.5)], [1, "transparent"]];
+export function flowTrailStops(color: string, beam: Pick<FlowBeam, "tail">): [number, string, number][] {
+    const share = Math.round((TRAIL_HEAD + beam.tail) / FLOW_SURGE_LENGTH / SURGE_STOP_STEP) * SURGE_STOP_STEP;
+    const at = (offset: number) => +(1 - share + offset * share).toFixed(4);
+    const hot = flowHot(color);
+    return [
+        ...TRAIL_STOPS.colour.map(([offset, strength]): [number, string, number] => [at(offset), color, strength]),
+        [at(TRAIL_STOPS.hot), hot, 1],
+        [1, hot, 0],
+    ];
 }
 
-/** The surge's soft blob, as a CSS background. */
-export function flowSurgeGradient(color: string, beam: Pick<FlowBeam, "surgeThickness" | "surgeWidth">): string {
-    return `radial-gradient(closest-side, ${flowSurgeStops(color, beam).map(([offset, stop]) => `${stop} ${+(offset * 100).toFixed(2)}%`).join(", ")})`;
+/** A surge's gradient as a CSS background, running `direction` from its tail to its head. */
+export function flowTrailGradient(color: string, beam: Pick<FlowBeam, "tail">, direction: string): string {
+    return `linear-gradient(${direction}, ${flowTrailStops(color, beam).map(([offset, stop, strength]) => `${tint(stop, strength)} ${pct(offset)}`).join(", ")})`;
+}
+
+/** How much of a simple-card beam `beamLength` px long fades out at each end, as a share of it. */
+export function flowFadeShare(beamLength: number): number {
+    return +Math.min(BEAM_FADE.max / beamLength, BEAM_FADE.share).toFixed(4);
 }
 
 /** One surge of an edge: its `animation-delay` and, while motion is reduced, where it rests. */
 export interface FlowSurge {
     delay: string;
-    /** The share of its path it rests at, so the edge's surges spread evenly along the beam. */
+    /**
+     * The share of its path it rests at: where its head sits on the beam, so
+     * the edge's surges spread evenly along it and each stays on it.
+     */
     rest: number;
 }
 
 /**
  * The surges on one edge, on a beam `beamLength` px long on screen as
  * `syncFlowRates` measured it, and the `playbackRate` they run at. Each one's
- * loop is one crossing: its centre runs from `flowSurgeLead` before the
- * beam's start to as far past its end, so the next one enters as the last
- * one leaves. They are spread evenly over the loop, by a delay in the
+ * loop is one crossing: it enters wholly before the beam's start and leaves
+ * wholly past its end. They are spread evenly over the loop, by a delay in the
  * animation's own time, which holds at any rate. A beam not measured yet, or
  * not laid out, carries none.
  */
@@ -285,7 +275,8 @@ export function flowSurges(r: number, beamLength: number | undefined): { count: 
         rate: flowSurgeRate(flowSpeed(r), beamLength),
         surges: Array.from({ length: count }, (_, index) => ({
             delay: `${-Math.round(index / count * SURGE_BASE_MS)}ms`,
-            rest: (index + 1) / (count + 1),
+            // Its head starts on the beam's start and covers one crossing over the path, so it rests that far along the beam.
+            rest: (index + 1) / (count + 1) * beamLength / flowSurgeTravel(beamLength),
         })),
     };
 }
@@ -316,8 +307,6 @@ export function flowRowGlow(color: string, size: number, inside: boolean): { bor
     };
 }
 
-const pct = (share: number) => `${+(share * 100).toFixed(2)}%`;
-
 /** The keyframe sets the surge and glow run, the only animations `syncFlowRates` retunes. */
 const SURGE_KEYFRAMES = "helman-surge";
 const GLOW_KEYFRAMES = "helman-glow";
@@ -327,7 +316,7 @@ const GLOW_KEYFRAMES = "helman-glow";
  * `syncFlowRates` sets each one's speed from its element's `data-rate`.
  *
  * `[data-beat="surge"]` moves its centre from `--surge-start-x/y`
- * (`flowSurgeLead` back from the beam's start) to the far side of the beam's
+ * (`FLOW_SURGE_LENGTH` / 2 back from the beam's start) to the far side of the beam's
  * vector `--surge-x/y`, as far past its end. `[data-beat="glow"]`, or the
  * `::after` of `[data-beat="glow-after"]`, ripples its opacity between a fixed
  * floor and 1. Motion reduced, a surge rests at `--surge-rest` of its path.

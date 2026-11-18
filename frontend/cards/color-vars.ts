@@ -66,7 +66,7 @@ export const helmanColorVars = css`
         --helman-phase-l2: var(--helman-theme-phase-l2, ${unsafeCSS(PHASE_COLORS[2])});
         --helman-phase-l3: var(--helman-theme-phase-l3, ${unsafeCSS(PHASE_COLORS[3])});
 
-        /* The white in a flow's hot core: a white core vanishes on a light theme. */
+        /* The white in a flow's hot pulse head: a white head vanishes on a light theme. */
         --helman-flow-hot-mix: var(--helman-theme-flow-hot-mix, ${unsafeCSS(FLOW_HOT_MIX)});
     }
     /* A card on a light theme says so on its host; set as the hook, so it reaches every component inside. */

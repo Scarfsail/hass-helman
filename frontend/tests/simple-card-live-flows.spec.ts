@@ -240,13 +240,12 @@ test.describe("the card draws the split as before", () => {
     });
 });
 
-test("the beams carry their surges in the flow direction at their own tempo, over a hot core", async ({ page }) => {
+test("the beams carry their surges in the flow direction at their own tempo", async ({ page }) => {
     await mountCard(page, { solar: 6500, house: 900, battery: 3200, grid: -2400 });
     const beams = await page.evaluate(async () => {
         const root = document.querySelector("helman-simple-card")!.shadowRoot!;
         return Promise.all([...root.querySelectorAll<SVGLineElement>("line[data-flow]")].map(async line => {
-            const core = line.nextElementSibling as SVGLineElement;
-            const surges = [...core.nextElementSibling!.querySelectorAll<SVGGElement>('[data-beat="surge"]')];
+            const surges = [...line.parentElement!.nextElementSibling!.querySelectorAll<SVGGElement>('[data-beat="surge"]')];
             const animations = surges.map(surge => surge.getAnimations()[0]);
             await Promise.all(animations.map(animation => animation.ready));
             const ctm = line.getScreenCTM()!;
@@ -255,8 +254,6 @@ test("the beams carry their surges in the flow direction at their own tempo, ove
             return {
                 flow: line.dataset.flow,
                 length: Math.hypot(end.x - start.x, end.y - start.y),
-                width: Number(line.getAttribute("stroke-width")),
-                coreWidth: Number(core.getAttribute("stroke-width")),
                 rates: animations.map(animation => animation.playbackRate),
                 delays: animations.map(animation => animation.effect!.getTiming().delay),
                 travelX: parseFloat(getComputedStyle(surges[0]).getPropertyValue("--surge-x")),
@@ -267,7 +264,6 @@ test("the beams carry their surges in the flow direction at their own tempo, ove
     expect(beams.map(beam => beam.flow)).toEqual(["solar-grid", "solar-house", "solar-battery"]);
     for (const [beam, watts] of [[beams[0], 2400], [beams[1], 900], [beams[2], 3200]] as const) {
         const { rate, surges } = flowSurges(flowRatio(watts, SCALE), beam.length);
-        expect(beam.coreWidth).toBeCloseTo(beam.width * 0.35, 5);
         // As many surges as the beam's length on screen holds, spread evenly over one crossing, each at its
         // speed over that length: within 1 %, as the card measured the beam on its own.
         expect(beam.delays).toEqual(surges.map(surge => parseFloat(surge.delay)));
@@ -277,19 +273,23 @@ test("the beams carry their surges in the flow direction at their own tempo, ove
     expect(beams[1].travelY).toBeGreaterThan(0);
     expect(beams[2].travelX).toBeGreaterThan(0);
 
-    // A surge fades out in its own colour, not through transparent black, so it leaves no grey fringe.
+    // A surge's tail and its head's tip fade out in their own colours, not through transparent black, so they leave no grey fringe.
     const outerStops = await page.evaluate(() => {
         const root = document.querySelector("helman-simple-card")!.shadowRoot!;
-        return [...root.querySelectorAll("radialGradient")].map(gradient => {
-            const stop = gradient.lastElementChild as SVGStopElement;
-            return { color: stop.style.stopColor, opacity: stop.style.stopOpacity, first: (gradient.firstElementChild as SVGStopElement).style.stopColor };
+        return [...root.querySelectorAll('[data-beat="surge"] rect')].map(rect => {
+            const gradient = root.querySelector(rect.getAttribute("fill")!.slice(4, -1))!;
+            return [gradient.firstElementChild, gradient.lastElementChild].map(stop => ({
+                color: (stop as SVGStopElement).style.stopColor,
+                opacity: (stop as SVGStopElement).style.stopOpacity,
+            }));
         });
     });
     expect(outerStops.length).toBeGreaterThan(0);
-    for (const { color, opacity, first } of outerStops) {
-        expect(opacity).toBe("0");
-        expect(color).not.toBe("transparent");
-        expect(color).not.toBe(first);
+    for (const ends of outerStops) {
+        for (const { color, opacity } of ends) {
+            expect(opacity).toBe("0");
+            expect(color).not.toBe("transparent");
+        }
     }
 
     const movement = await page.evaluate(async () => {
@@ -304,7 +304,7 @@ test("the beams carry their surges in the flow direction at their own tempo, ove
     const reverse = await page.evaluate(() => {
         const root = [...document.querySelectorAll("helman-simple-card")].at(-1)!.shadowRoot!;
         return [...root.querySelectorAll("line[data-flow]")].map(line => {
-            const surge = line.nextElementSibling!.nextElementSibling!.querySelector('[data-beat="surge"]')!;
+            const surge = line.parentElement!.nextElementSibling!.querySelector('[data-beat="surge"]')!;
             return {
                 travelX: parseFloat(getComputedStyle(surge).getPropertyValue("--surge-x")),
                 travelY: parseFloat(getComputedStyle(surge).getPropertyValue("--surge-y")),
@@ -444,7 +444,7 @@ test("multiple cards keep their gradient IDs inside their own shadow roots", asy
         await second.updateComplete;
         await new Promise(resolve => {
             const timer = setInterval(() => {
-                if (second.shadowRoot?.querySelector("radialGradient")) {
+                if (second.shadowRoot?.querySelector("linearGradient")) {
                     clearInterval(timer);
                     resolve(undefined);
                 }
@@ -453,7 +453,7 @@ test("multiple cards keep their gradient IDs inside their own shadow roots", asy
         const cards = [...document.querySelectorAll("helman-simple-card")];
         return cards.map(card => {
             const root = card.shadowRoot!;
-            return [...root.querySelectorAll("radialGradient, mask")].map(definition => ({
+            return [...root.querySelectorAll("linearGradient, mask")].map(definition => ({
                 id: definition.id,
                 present: !!root.querySelector(`#${definition.id}`),
             }));
