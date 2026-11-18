@@ -29,7 +29,7 @@ hide_money_strip: false
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `slot_minutes` | by width | Slot width at open: `15`, `30` or `60`. A phone opens at 60, a laptop at 30 |
-| `daylight_only_default` | `true` | Open cropped to the hours with sun |
+| `daylight_only_default` | `true` | Open cropped to the hours with sun. Today then starts an hour before now and follows the clock |
 | `daylight_threshold_w` | 100 | Solar power from which a slot counts as having sun |
 | `show_bias_ratio` | `false` | Show the solar-correction diagnostics from the start: raw forecast, correction strip, per-slot factors |
 | `dim_incomplete_slots` | `true` | Dim chart columns whose data is incomplete |

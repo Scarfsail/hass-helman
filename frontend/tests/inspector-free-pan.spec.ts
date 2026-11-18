@@ -1,7 +1,34 @@
 import { test, expect, type Page } from "@playwright/test";
 
-import { FIXED_NOW_ISO, FIXED_TODAY, installFixedClock } from "./support/fixed-clock";
-import { loadBundle } from "./support/card-page";
+import { FIXED_NOW_ISO } from "./support/fixed-clock";
+import {
+    STOP_MONTH_VIEW,
+    STOP_SLOT_60,
+    clickColumn,
+    clickStop,
+    columns,
+    clickSpanPill,
+    loadCardBundle,
+    mountInspector as mountAggregateInspector,
+    pageBackAndWait,
+    waitForAggregateChart,
+} from "./support/inspector-aggregate-harness";
+import {
+    DAY_MS,
+    TODAY,
+    TOMORROW,
+    YESTERDAY,
+    mountInspector,
+    mouseDrag,
+    plotBox,
+    pressPill,
+    readPanels,
+    readView,
+    solarHours,
+    touchDrag,
+    watchForLoading,
+    type ViewState,
+} from "./support/pan-inspector";
 
 /**
  * Dragging the solar inspector's day view freely through time.
@@ -12,251 +39,12 @@ import { loadBundle } from "./support/card-page";
  * one, and whichever day covers most of the window becomes the selected day --
  * the pills, the totals and the slot detail follow it, with no load.
  *
- * Each day of the fixture is told apart by its numbers: its solar hours, its
- * solar level, its prices and its totals all move with the day, so what is
- * drawn where says which day it came from.
+ * The three-day fixture lives in `support/pan-inspector`.
  */
 
-const DAY_MS = 86_400_000;
-
-function dayAt(offset: number): string {
-    return new Date(Date.parse(`${FIXED_TODAY}T00:00:00Z`) + offset * DAY_MS).toISOString().slice(0, 10);
-}
-
-const YESTERDAY = dayAt(-1);
-const TODAY = FIXED_TODAY;
-const TOMORROW = dayAt(1);
-
-/** Today's solar hours are 08-16, tomorrow's 06-18, yesterday's 10-14. */
-function solarHours(offset: number): { start: number; end: number } {
-    return { start: 8 - 2 * offset, end: 16 + 2 * offset };
-}
-
-async function mountInspector(
-    page: Page,
-    options: { daylightOnly: boolean; nowIso?: string; slotMinutes?: number; hourlyDates?: string[] },
-): Promise<void> {
-    await page.setViewportSize({ width: 1200, height: 1000 });
-    await installFixedClock(page);
-    if (options.nowIso !== undefined) await page.clock.setFixedTime(new Date(options.nowIso));
-    await loadBundle(page, "helman-solar-inspector");
-    await page.evaluate(({ daylightOnly, slotMinutes, hourlyDates, today, yesterday, tomorrow }) => {
-        const dayMs = 86_400_000;
-        const todayMs = Date.parse(`${today}T00:00:00Z`);
-        const offsetOf = (date: string) => Math.round((Date.parse(`${date}T00:00:00Z`) - todayMs) / dayMs);
-        const slotsOf = (minutes: number) => Array.from({ length: 1440 / minutes }, (_, index) =>
-            `${String(Math.floor((index * minutes) / 60)).padStart(2, "0")}:${String((index * minutes) % 60).padStart(2, "0")}`);
-        const payload = (date: string) => {
-            const offset = offsetOf(date);
-            // A day only the recorder's hourly statistics still hold: the same
-            // power, in a quarter as many buckets of four times the energy.
-            const granularity = hourlyDates.includes(date) ? 60 : 15;
-            const perBucket = granularity / 15;
-            const slots = slotsOf(granularity);
-            const firstHour = 8 - 2 * offset;
-            const lastHour = 16 + 2 * offset;
-            const sunny = (slot: string) => {
-                const hour = Number(slot.slice(0, 2));
-                return hour >= firstHour && hour < lastHour;
-            };
-            return window.__inspectorDay({
-                date,
-                timezone: "UTC",
-                status: "ok",
-                effectiveVariant: null,
-                trainedAt: null,
-                range: {
-                    minDate: yesterday,
-                    maxDate: tomorrow,
-                    canGoPrevious: date > yesterday,
-                    canGoNext: date < tomorrow,
-                    isToday: date === today,
-                    isFuture: date > today,
-                },
-                series: {
-                    raw: [], actual: [], invalidated: [], factors: [], impact: [],
-                    corrected: slots.map((slot) => ({ slot, valueWh: sunny(slot) ? 100 * (offset + 3) * perBucket : 0 })),
-                    houseForecast: [], houseActual: [], houseActualBreakdown: [],
-                    batterySocForecast: slots.map((slot) => ({ slot, pct: 50 + 10 * offset })),
-                    batterySocActual: [],
-                    gridForecast: [], gridActual: [], batteryForecast: [], batteryActual: [],
-                    importPrice: slots.map((slot) => ({ slot, value: 3 + offset })),
-                    exportPrice: slots.map((slot) => ({ slot, value: 1 })),
-                    moneyActual: [],
-                    moneyForecast: slots.map((slot) => ({ slot, cost: 0.2 * (offset + 2) * perBucket, gain: 0.1 * perBucket })),
-                },
-                totals: {
-                    rawWh: null, correctedWh: 1000 * (offset + 5), actualWh: null,
-                    houseForecastWh: null, houseActualWh: null, gridForecastWh: null, gridActualWh: null,
-                    batteryForecastWh: null, batteryActualWh: null, moneyActual: null, moneyForecast: null,
-                },
-                availability: { hasProfile: true },
-                ...(granularity === 15 ? {} : { dataGranularityMinutes: granularity }),
-                priceUnit: "CZK/kWh",
-                batterySocBounds: [],
-            });
-        };
-
-        // Two days of schedule with the boiler on in the evening today and in
-        // the small hours tomorrow, so the band has a run on each side of the
-        // midnight a drag carries into view.
-        const scheduleSlots = Array.from({ length: 2 * 96 }, (_, index) => {
-            const at = todayMs + index * 900_000;
-            const hour = Math.floor(index / 4);
-            const on = hour === 20 || hour === 27;
-            return { id: new Date(at).toISOString(), controllables: on ? { boiler: { on: true, setBy: "user" } } : {} };
-        });
-
-        const requestedDates: string[] = [];
-        (window as unknown as Record<string, unknown>).__requestedDates = requestedDates;
-        const inspector = document.createElement("helman-solar-inspector") as unknown as HTMLElement & Record<string, unknown>;
-        inspector.daylightOnlyDefault = daylightOnly;
-        inspector.slotMinutesDefault = slotMinutes;
-        inspector.hass = {
-            language: "en",
-            locale: { language: "en" },
-            config: { time_zone: "UTC" },
-            states: {
-                "switch.boiler": {
-                    entity_id: "switch.boiler", state: "off",
-                    attributes: { friendly_name: "Boiler" }, last_changed: new Date().toISOString(),
-                },
-            },
-            ...window.__mockHass({
-                "helman/solar_bias/inspector": async (message: { date?: string }) => {
-                    requestedDates.push(message.date ?? "");
-                    return payload(message.date ?? "");
-                },
-                "helman/get_schedule": { executionEnabled: true, slotMinutes: 15, slots: scheduleSlots },
-                "helman/get_appliances": { appliances: [{
-                    id: "boiler", name: "Boiler", kind: "generic", primaryEntityId: "switch.boiler",
-                    supportsAuthoring: true, normalState: "off",
-                    metadata: { icon: "mdi:water-boiler", scheduleCapabilities: { onOffToggle: true } },
-                    controls: { switch: { entityId: "switch.boiler" } },
-                }] },
-                "helman/get_entity_actual_history": { entities: {} },
-                "helman/get_appliance_projections": { appliances: [] },
-            }),
-        };
-        document.body.appendChild(inspector);
-    }, {
-        daylightOnly: options.daylightOnly, slotMinutes: options.slotMinutes ?? 30, hourlyDates: options.hourlyDates ?? [],
-        today: TODAY, yesterday: YESTERDAY, tomorrow: TOMORROW,
-    });
-
-    await page.waitForFunction(() => {
-        const root = document.querySelector("helman-solar-inspector")?.shadowRoot;
-        return !!root?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".main-chart-wrap svg")
-            && !!root.querySelector("helman-solar-day-pills")?.shadowRoot?.querySelector(".pill.selected")
-            && !!root.querySelector("helman-solar-schedule-band-strip")?.shadowRoot
-                ?.querySelector("scheduling-entity-day-band");
-    });
-}
-
-type ViewState = {
-    selected: string | null;
-    start: number;
-    end: number;
-    overlayDate: string | null;
-    overlayStart: number | null;
-    selection: string[];
-    loading: boolean;
-};
-
-/** What the day view is showing: the lit pill, the window and the neighbour overlay. */
-function readView(page: Page): Promise<ViewState> {
-    return page.evaluate(() => {
-        const root = document.querySelector("helman-solar-inspector")!.shadowRoot!;
-        const chart = root.querySelector("helman-solar-day-chart:not([overlay])") as any;
-        const overlay = root.querySelector("helman-solar-day-chart[overlay]") as any;
-        const pill = root.querySelector("helman-solar-day-pills")!.shadowRoot!.querySelector(".pill.selected");
-        return {
-            selected: pill?.getAttribute("data-day") ?? null,
-            start: chart.layout.dayStartMinutes,
-            end: chart.layout.dayEndMinutes,
-            overlayDate: overlay?.date ?? null,
-            overlayStart: overlay?.layout?.dayStartMinutes ?? null,
-            selection: [...chart.selection.selectedSlots],
-            loading: !!root.querySelector(".loading-overlay"),
-        };
-    });
-}
-
-/** The selected day's plot, in client pixels. */
-function plotBox(page: Page): Promise<{ left: number; width: number; top: number }> {
-    return page.evaluate(() => {
-        const chart = document.querySelector("helman-solar-inspector")!.shadowRoot!
-            .querySelector("helman-solar-day-chart:not([overlay])") as any;
-        const svg = chart.shadowRoot.querySelector(".main-chart-wrap svg") as SVGSVGElement;
-        const rect = svg.getBoundingClientRect();
-        const scale = rect.width / chart.layout.width;
-        return {
-            left: rect.left + chart.layout.margin.left * scale,
-            width: chart.layout.plotWidth * scale,
-            top: rect.top + chart.layout.margin.top * scale,
-        };
-    });
-}
-
-/**
- * A left-button drag across the chart by `fraction` of the plot's width:
- * negative drags leftwards, which moves the window later.
- */
-async function mouseDrag(page: Page, fraction: number): Promise<void> {
-    const plot = await plotBox(page);
-    const y = plot.top + 40;
-    const startX = fraction < 0 ? plot.left + plot.width - 4 : plot.left + 4;
-    await page.mouse.move(startX, y);
-    await page.mouse.down();
-    await page.mouse.move(startX + fraction * plot.width, y, { steps: 12 });
-    await page.mouse.up();
-}
-
-/** A one-finger drag on the chart, as the pointer events a touch screen sends. */
-async function touchDrag(page: Page, dx: number, dy: number): Promise<void> {
-    await page.evaluate(({ dx, dy }) => {
-        const chart = document.querySelector("helman-solar-inspector")!.shadowRoot!
-            .querySelector("helman-solar-day-chart:not([overlay])") as any;
-        const svg = chart.shadowRoot.querySelector(".main-chart-wrap svg") as SVGSVGElement;
-        const rect = svg.getBoundingClientRect();
-        const x0 = rect.left + rect.width * 0.8;
-        const y0 = rect.top + 60;
-        const send = (type: string, x: number, y: number) => svg.dispatchEvent(new PointerEvent(type, {
-            pointerId: 7, pointerType: "touch", isPrimary: true, button: 0,
-            clientX: x, clientY: y, bubbles: true, composed: true, cancelable: true,
-        }));
-        send("pointerdown", x0, y0);
-        for (let step = 1; step <= 10; step += 1) send("pointermove", x0 + (dx * step) / 10, y0 + (dy * step) / 10);
-        send("pointerup", x0 + dx, y0 + dy);
-    }, { dx, dy });
-}
-
-/** Press a day's pill. */
-async function pressPill(page: Page, day: string): Promise<void> {
-    await page.evaluate((day) => {
-        const pill = document.querySelector("helman-solar-inspector")!.shadowRoot!
-            .querySelector("helman-solar-day-pills")!.shadowRoot!
-            .querySelector(`.pill[data-day="${day}"]`) as HTMLButtonElement;
-        pill.click();
-    }, day);
-}
-
-/** The two panels under the strips: the selected slot's detail, and the day's totals. */
-function readPanels(page: Page): Promise<string[]> {
-    return page.evaluate(() => [...document.querySelector("helman-solar-inspector")!.shadowRoot!
-        .querySelectorAll(".metrics-section")].map((section) => section.textContent?.replace(/\s+/g, " ").trim() ?? ""));
-}
-
-/** Remember whether the loading overlay ever appears from here on. */
-async function watchForLoading(page: Page): Promise<void> {
-    await page.evaluate(() => {
-        const root = document.querySelector("helman-solar-inspector")!.shadowRoot!;
-        const w = window as unknown as Record<string, unknown>;
-        w.__sawLoading = false;
-        new MutationObserver(() => {
-            if (root.querySelector(".loading-overlay")) w.__sawLoading = true;
-        }).observe(root, { childList: true, subtree: true });
-    });
+/** Which view the card is in: "day", or "month" and "year" for D and M. */
+function viewMode(page: Page): Promise<string> {
+    return page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)._viewMode);
 }
 
 test.describe("dragging the inspector's day view", () => {
@@ -512,7 +300,8 @@ test.describe("dragging the inspector's day view", () => {
     });
 
     test("daylight-only: the window takes each day's solar width around the same centre", async ({ page }) => {
-        await mountInspector(page, { daylightOnly: true });
+        // Before sunrise, so today opens at its own solar hours rather than following now.
+        await mountInspector(page, { daylightOnly: true, nowIso: `${TODAY}T06:00:00.000Z` });
         const today = solarHours(0);
         const tomorrow = solarHours(1);
         expect(await readView(page)).toMatchObject({ selected: TODAY, start: today.start * 60, end: today.end * 60 });
@@ -705,5 +494,73 @@ test.describe("dragging the inspector's day view", () => {
             await page.waitForTimeout(100);
         }
         await expect.poll(() => readView(page)).toMatchObject({ selected: YESTERDAY, start: 0, end: 1440 });
+    });
+    test("a dragged window keeps its place, snapped, across a change of slot width", async ({ page }) => {
+        await mountInspector(page, { daylightOnly: false, slotMinutes: 30 });
+        // A tenth of the day earlier, which a 30-minute grid leaves off the hour.
+        await mouseDrag(page, 0.1);
+        await expect.poll(() => readView(page).then((view) => view.start)).toBeLessThan(0);
+        const dragged = await readView(page);
+        expect(Math.abs(dragged.start % 30)).toBe(0);
+
+        await clickStop(page, STOP_SLOT_60);
+        const snapped = Math.round(dragged.start / 60) * 60;
+        await expect.poll(() => readView(page)).toMatchObject({
+            selected: TODAY, start: snapped, end: snapped + 1440, overlayDate: YESTERDAY,
+        });
+    });
+
+    test("a dragged window survives a trip through D and back to the same day", async ({ page }) => {
+        await mountInspector(page, { daylightOnly: false, slotMinutes: 60 });
+        await mouseDrag(page, -0.25);
+        await expect.poll(() => readView(page)).toMatchObject({ selected: TODAY, start: 360, end: 1800 });
+
+        await clickStop(page, STOP_MONTH_VIEW);
+        await expect.poll(() => viewMode(page)).toBe("month");
+        await clickStop(page, STOP_SLOT_60);
+        await expect.poll(() => readView(page)).toMatchObject({
+            selected: TODAY, start: 360, end: 1800, overlayDate: TOMORROW,
+        });
+    });
+
+    test("a dragged window stays on its day when D pages away and back", async ({ page }) => {
+        await page.setViewportSize({ width: 1200, height: 1000 });
+        await loadCardBundle(page);
+        await mountAggregateInspector(page);
+        await page.waitForFunction(() => !!document.querySelector("helman-solar-inspector")!.shadowRoot!
+            .querySelector("helman-solar-day-pills")?.shadowRoot?.querySelector(".pill.selected"));
+        await mouseDrag(page, 0.25);
+        await expect.poll(() => readView(page)).toMatchObject({ selected: TODAY, start: -360, end: 1080 });
+
+        // Paging parks the date on a span start, the 1st of this month once back:
+        // with no column picked, that is the day a slot width opens.
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await pageBackAndWait(page);
+        await clickSpanPill(page, "months", `${TODAY.slice(0, 7)}-01`);
+        await waitForAggregateChart(page);
+        await clickStop(page, STOP_SLOT_60);
+        await expect.poll(() => readView(page)).toMatchObject({
+            selected: `${TODAY.slice(0, 7)}-01`, start: 0, end: 1440, overlayDate: null,
+        });
+    });
+
+    test("a slot width opening another day lands on that day's own window", async ({ page }) => {
+        // The aggregate harness, whose backend serves D its columns to press.
+        await page.setViewportSize({ width: 1200, height: 1000 });
+        await loadCardBundle(page);
+        await mountAggregateInspector(page);
+        await page.waitForFunction(() => !!document.querySelector("helman-solar-inspector")!.shadowRoot!
+            .querySelector("helman-solar-day-pills")?.shadowRoot?.querySelector(".pill.selected"));
+        await mouseDrag(page, 0.25);
+        await expect.poll(() => readView(page)).toMatchObject({ selected: TODAY, start: -360, end: 1080 });
+
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await clickColumn(page, (await columns(page)).indexOf(YESTERDAY));
+        await clickStop(page, STOP_SLOT_60);
+        await expect.poll(() => readView(page)).toMatchObject({
+            selected: YESTERDAY, start: 0, end: 1440, overlayDate: null,
+        });
     });
 });
