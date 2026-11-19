@@ -194,6 +194,10 @@ async function openDevice(page: Page, name: string): Promise<void> {
 
 const scheduleButton = (page: Page) => page.locator("node-detail-dialog helman-detail-section[data-schedule] button").first();
 const controls = (page: Page) => page.locator("helman-node-control");
+/** The Overview's control tiles, one per lane. */
+const tiles = (page: Page) => page.locator("node-detail-device-content helman-control-tile");
+/** Who decides a tile's lane. */
+const who = (tile: ReturnType<typeof tiles>) => tile.locator("[data-who] > span:last-child");
 const switchTile = (page: Page) => page.locator("node-detail-device-content helman-switch-tile");
 /** The card's day editor, as Override opens it over the detail. */
 const editor = (page: Page) => page.locator("scheduling-entity-day-editor");
@@ -211,9 +215,9 @@ async function openControl(page: Page, name: string): Promise<void> {
     await scheduleButton(page).click();
 }
 
-/** Override a control's lane from now for an hour with the editor option `mode`. */
-async function override(page: Page, control: ReturnType<typeof controls>, mode: string): Promise<void> {
-    await control.locator("[data-change]").click();
+/** Override a control tile's lane from now for an hour with the editor option `mode`. */
+async function override(page: Page, tile: ReturnType<typeof tiles>, mode: string): Promise<void> {
+    await tile.locator("[data-override]").click();
     await editor(page).locator('.edit-panel [data-start-pick="plus_1h"]').click();
     // The option's radio is visually hidden: a reader presses its chip.
     await editor(page).locator(`.edit-panel label:has(input[value="${mode}"])`).click();
@@ -227,9 +231,11 @@ test.describe("a schedulable device", () => {
     test("Overview shows an unmet candidate as off; its Override opens the editor on the device alone and Back returns to the detail", async ({ page }) => {
         await mount(page, plan([["12:00", "13:00", { boiler: auto({ on: true, conditionMet: false }) }]]));
         await openDevice(page, "Boiler");
-        const overview = page.locator("node-detail-device-content helman-who-decides");
-        await expect(overview.locator(".row").nth(1).locator("span").last()).toContainText("off until");
-        await overview.locator("button").first().click();
+        const overview = tiles(page);
+        await expect(overview.locator("[data-planned] > span").last()).toContainText("off until");
+        // One lane: the tile is not titled.
+        await expect(overview.locator("[data-lane-name]")).toHaveCount(0);
+        await overview.locator("[data-override]").click();
         await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "boiler", single: true });
         await expect.poll(() => editor(page).locator("ha-dialog").evaluate((dialog: any) => dialog.heading)).toBe("Schedule · Boiler");
         await expect(editor(page).locator("scheduling-entity-day-band .lane")).toHaveCount(1);
@@ -248,18 +254,18 @@ test.describe("a schedulable device", () => {
             ["17:00", "18:00", { boiler: auto({ on: false }) }],
         ]));
         await openDevice(page, "Boiler");
-        const overview = page.locator("node-detail-device-content helman-who-decides");
-        await expect(overview.locator(".row").nth(1).locator("span").last()).toHaveText("on until 14:00 · You");
+        const overview = tiles(page);
+        await expect(overview.locator("[data-planned] > span").last()).toHaveText("on until 14:00 · You");
         await expect(page.locator("node-detail-dialog helman-detail-section[data-schedule] [slot=summary]")).toContainText("Next: off at 17:00");
     });
 
     test("Planned now names the optimizer that placed the run in progress", async ({ page }) => {
         await mount(page, plan([["12:00", "14:00", { boiler: auto({ on: true, optimizer: "appliance_runtime" }) }]]));
         await openDevice(page, "Boiler");
-        const overview = page.locator("node-detail-device-content helman-who-decides");
-        await expect(overview.locator(".row").nth(1).locator("span").last()).toHaveText("on until 14:00 · Appliance runtime");
+        const overview = tiles(page);
+        await expect(overview.locator("[data-planned] > span").last()).toHaveText("on until 14:00 · Appliance runtime");
         // Who controls the lane stays Helman's schedule.
-        await expect(overview.locator(".row").first().locator(":scope > span").last()).toHaveText("Helman's schedule");
+        await expect(who(overview)).toHaveText("Helman's schedule");
     });
 
     test("a climate lane's changes name its modes in words", async ({ page }) => {
@@ -271,13 +277,13 @@ test.describe("a schedulable device", () => {
     test("Planned now says nothing is planned in the house roll-up's words", async ({ page }) => {
         await mount(page, plan());
         await openDevice(page, "Boiler");
-        await expect(page.locator("node-detail-device-content helman-who-decides .row").nth(1).locator("span").last()).toHaveText("Nothing planned");
+        await expect(tiles(page).locator("[data-planned] > span").last()).toHaveText("Nothing planned");
     });
 
     test("the switch help names the next planned change", async ({ page }) => {
         await mount(page, plan([["12:00", "13:00", { boiler: auto({ on: true }) }]]));
         await openDevice(page, "Boiler");
-        const tip = page.locator("node-detail-device-content helman-who-decides helman-help-tip");
+        const tip = tiles(page).locator("[data-who] helman-help-tip");
         await expect.poll(() => tip.evaluate((el: any) => el.explanation)).toMatch(/next planned change at \d{1,2}[:.]\d{2}/);
         expect(await tip.evaluate((el: any) => el.explanation)).not.toContain("—");
     });
@@ -285,7 +291,7 @@ test.describe("a schedulable device", () => {
     test("the switch help omits the time when no change is planned", async ({ page }) => {
         await mount(page, plan());
         await openDevice(page, "Boiler");
-        const tip = page.locator("node-detail-device-content helman-who-decides helman-help-tip");
+        const tip = tiles(page).locator("[data-who] helman-help-tip");
         await expect.poll(() => tip.evaluate((el: any) => el.explanation)).toContain("next planned change, then");
         expect(await tip.evaluate((el: any) => el.explanation)).not.toContain("—");
     });
@@ -306,9 +312,9 @@ test.describe("a schedulable device", () => {
         await scheduleButton(page).click();
         await expect(controls(page)).toHaveCount(1);
         await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "boiler");
-        await expect(controls(page).locator("[data-status]")).toHaveText("Automatic");
+        await expect(who(tiles(page))).toHaveText("Helman's schedule");
 
-        await override(page, controls(page), "on");
+        await override(page, tiles(page), "on");
         expect(await writes(page)).toEqual([hour({ boiler: { on: true }, klima: { mode: "cool" } })]);
     });
 
@@ -316,7 +322,7 @@ test.describe("a schedulable device", () => {
         await mount(page, plan([["12:00", "12:30", { boiler: user({ on: true }) }]]));
         await openControl(page, "Klima");
         await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "klima");
-        await override(page, controls(page), "heat");
+        await override(page, tiles(page), "heat");
         expect(await writes(page)).toEqual([[
             ...hour({ boiler: { on: true }, klima: { mode: "heat" } }).slice(0, 2),
             ...hour({ klima: { mode: "heat" } }).slice(2),
@@ -338,21 +344,36 @@ test.describe("a schedulable device", () => {
         await expect(controls(page)).toHaveCount(2);
         // The breaker's switch is on Overview, separate from its lanes.
         await expect(controls(page).locator("[data-lane-name]")).toHaveText(["Pump A", "Pump B"]);
-        await expect(controls(page).nth(0).locator("[data-status]")).toHaveText("Manual until Today 13:00");
-        await expect(controls(page).nth(1).locator("[data-status]")).toHaveText("Not automated");
-        await expect(controls(page).nth(1).locator("[data-return]")).toHaveCount(0);
+        // One titled control tile per lane on the Overview.
+        await expect(tiles(page)).toHaveCount(2);
+        await expect(tiles(page).locator("[data-lane-name]")).toHaveText(["Pump A", "Pump B"]);
+        await expect(who(tiles(page).nth(0))).toHaveText("You, until Today 13:00");
+        await expect(who(tiles(page).nth(1))).toHaveText("Not automated");
+        await expect(tiles(page).nth(0).locator("[data-return]")).toBeVisible();
+        await expect(tiles(page).nth(1).locator("[data-return]")).toHaveCount(0);
 
-        await override(page, controls(page).nth(1), "off");
+        await override(page, tiles(page).nth(1), "off");
         expect(await writes(page)).toEqual([hour({ "pump-a": { on: true }, "pump-b": { on: false } })]);
+    });
+
+    test("each lane's control tile opens the day editor on its own lane", async ({ page }) => {
+        await mount(page, plan());
+        await openDevice(page, "Pumps");
+        for (const [index, lane] of [[0, "pump-a"], [1, "pump-b"]] as const) {
+            await tiles(page).nth(index).locator("[data-override]").click();
+            await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: lane, single: true });
+            await page.evaluate(() => window.history.back());
+            await expect.poll(() => dayEditor(page).then((state) => state.open)).toBe(false);
+        }
     });
 
     test("a lane whose actions cannot be authored is shown with why, and cannot be overridden", async ({ page }) => {
         await mount(page);
         await openControl(page, "Legacy");
         await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "legacy");
-        await expect(controls(page).locator("[data-status]")).toHaveText("Not automated");
+        await expect(who(tiles(page))).toHaveText("Not automated");
         await expect(controls(page).locator("[data-unsupported]")).toBeVisible();
-        await expect(controls(page).locator("[data-change]")).toHaveCount(0);
+        await expect(tiles(page).locator("[data-override]")).toBeDisabled();
     });
 });
 

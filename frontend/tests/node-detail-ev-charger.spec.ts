@@ -351,6 +351,10 @@ test("ev-charger Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-switch-tile")).toHaveCount(1);
     await expect(c.locator("helman-flow-gauge")).toHaveCount(1);
     await expect(c.locator("[data-car]")).toHaveCount(1);
+    // Headline, gauge, the control tile with the mode control in it, then the car.
+    expect(await c.locator("[data-overview]").evaluate((el) => Array.from(el.children).map((child) => child.hasAttribute("data-car") ? "car" : child.tagName.toLowerCase())))
+        .toEqual(["helman-detail-headline", "helman-flow-gauge", "helman-control-tile", "car"]);
+    await expect(c.locator("helman-control-tile > helman-ev-mode-control")).toHaveCount(1);
 });
 
 test("charger Overview says a charge started by hand is left running", async ({ page }) => {
@@ -387,7 +391,7 @@ test("charger car tile gives the limit, needed energy and ETA", async ({ page })
     await expect(c.locator("[data-car]")).toContainText("Kona");
     await expect(c.locator("[data-car] [data-limit-marker]")).toHaveCount(1);
     await expect(c.locator("[data-car]")).toContainText("Still needed");
-    await expect(c.locator("helman-who-decides")).toBeVisible();
+    await expect(c.locator("helman-control-tile")).toBeVisible();
     await expect(c.locator("[data-overview]").locator("helman-mode-strip")).toHaveCount(0);
 });
 
@@ -401,8 +405,8 @@ test("charger Schedule does not promise an unmet charge candidate", async ({ pag
 test("charger Overview shows an unmet current candidate as idle", async ({ page }) => {
     await mount(page, { windows: [{ from: 11.75, to: 14, candidate: true }] });
     await openDevice(page, "Garage EV");
-    const planned = content(page).locator("helman-who-decides .row").nth(1);
-    await expect(planned.locator("span").last()).toContainText("idle until");
+    const planned = content(page).locator("helman-control-tile [data-planned] > span").last();
+    await expect(planned).toContainText("idle until");
 });
 
 test("charger Schedule strip draws today's charging before now and the plan after it, with the changes to come", async ({ page }) => {
@@ -425,16 +429,15 @@ test("charger Schedule strip draws today's charging before now and the plan afte
     // What was charged and what is planned to charge are one mode, named once.
     expect(await control.locator("helman-mode-strip [data-legend-entry]").allInnerTexts()).toEqual(["Charging", "Charging · candidate"]);
     await expect(control.locator("[data-history-note]")).toHaveCount(0);
-    // One button: the override is the day editor on this charger alone.
-    await expect(control.locator(".actions > button")).toHaveCount(1);
-    await expect(control.locator("[data-change]")).toHaveText("Override…");
+    // The plan only: Override and Return to plan are the Overview's control tile.
+    await expect(control.getByText("Override…")).toHaveCount(0);
+    await expect(content(page).locator("helman-control-tile [data-override]")).toHaveText("Override…");
 });
 
 test("charger Override opens the day editor on the charger alone, saves a claimed hour and returns to the detail", async ({ page }) => {
     await mount(page);
     await openDevice(page, "Garage EV");
-    await page.locator("node-detail-dialog helman-detail-section[data-schedule] button").first().click();
-    await page.locator("helman-node-control [data-change]").click();
+    await content(page).locator("helman-control-tile [data-override]").click();
     const editorState = () => page.evaluate(async () => {
         const host = document.querySelector("helman-card")!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
         await host.updateComplete;
@@ -450,7 +453,7 @@ test("charger Override opens the day editor on the charger alone, saves a claime
     await editor.locator('.edit-panel select:has(option[value="kona"])').selectOption("kona");
     await editor.locator("ha-button[slot=primaryAction]").click();
     await expect.poll(() => editorState().then((state) => state.open)).toBe(false);
-    await expect(page.locator("helman-node-control")).toBeVisible();
+    await expect(content(page).locator("helman-control-tile")).toBeVisible();
     const writes = await page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "helman/set_schedule").map((r) => r.slots));
     // The automation's Fast window is taken over: each slot is now the user's.
     expect(writes).toEqual([["12:00", "12:15", "12:30", "12:45"].map((time) => ({
@@ -694,6 +697,9 @@ test("charger mode control is locked while an executing window sets the mode, an
     await mount(page);
     await openDevice(page, "Garage EV");
     await expect(modeControl(page).locator("button")).toHaveCount(2);
+    // Two modes: one segmented bar, on one line.
+    await expect(modeControl(page).locator("[data-ev-mode-row=use_mode] .segments")).toHaveCount(1);
+    expect(new Set(await modeControl(page).locator("button").evaluateAll((buttons) => buttons.map((b) => b.getBoundingClientRect().top))).size).toBe(1);
     for (const button of await modeControl(page).locator("button").all()) await expect(button).toBeDisabled();
     await expect(modeControl(page).locator("[data-ev-mode-locked]")).toHaveText("Set by the plan until 14:00");
 });

@@ -5,7 +5,6 @@ import type { HomeAssistant } from "../../types/ha";
 import type { ScheduleControllableActionDTO } from "../helman-api";
 import { fillTemplate, getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { DialogHistoryController } from "../shared/dialog-history-controller";
-import { showToast } from "../shared/fire-event";
 import { asJsonObject, getValueAtPath, setValueAtPath } from "../shared/config/config-document";
 import { booleanValue, stringValue } from "../shared/config/form-fields";
 import "../shared/mode-strip";
@@ -14,8 +13,6 @@ import { getLaneAutomationCoverage } from "../shared/optimizer/automation-covera
 import { findOptimizerLocations } from "../shared/optimizer/optimizer-locations";
 import type { HelmanOptimizerEditDialog } from "../shared/optimizer/helman-optimizer-edit-dialog";
 import { getScheduleActionTone, type ScheduleActionTone } from "../shared/schedule/action-tones";
-import { openScheduleEditorOnLane } from "../shared/schedule/dialogs/scheduling-day-editor-host";
-import { buildEntityScheduleLanePatches } from "../shared/schedule/model/entity-day-schedule-model";
 import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
 import {
     describeScheduleAppliance,
@@ -23,11 +20,10 @@ import {
     type ScheduleControllable,
 } from "../shared/schedule/model/schedule-appliance-metadata";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
-import { getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import { INVERTER_CONTROLLABLE_ID, isScheduleApplianceActionEnabled, isScheduleInverterAction } from "../shared/schedule/schedule-types";
 import { schedulingSharedStyles } from "../shared/schedule/styles/scheduling-shared-styles";
 import { AdminConfigController } from "./admin-config-controller";
-import { currentManualRun, LaneOwnershipController } from "./lane-ownership";
+import { LaneOwnershipController } from "./lane-ownership";
 import { effectiveLaneAction, inverterModeLabel, laneActionLabel, laneRuns, optimizerName, scheduleReason, upcomingLaneChanges, type LaneChange } from "./node-detail-schedule";
 import { NO_LANE_HISTORY, type LaneHistory } from "./node-detail-types";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
@@ -44,15 +40,13 @@ type NestedDialog = { kind: "optimizer"; optimizerId: string };
 
 /**
  * The Schedule section of a lane: the plan from today to noon tomorrow as a
- * strip, the changes coming today and tomorrow, Override, who owns the lane
- * now and the automations that drive it.
+ * strip, the changes coming today and tomorrow and the automations that
+ * drive it. Who owns the lane and Override are the Overview's control tile.
  *
  * The plan, the coverage and the roster are the shared ones, followed while
  * the section is in the page. What happened before now is the host's:
- * `history`, from the detail that reads it. "Override" asks the card hosting
- * the detail to open its day editor on this lane alone; what it saves is a
- * user-authored stretch of the schedule, so it never writes to the hardware
- * itself, and with execution off says so.
+ * `history`, from the detail that reads it. With execution off it says the
+ * plan makes no hardware change.
  *
  * The automation rows are an admin's: only then is the config read, and each
  * switch reads the current document again before it saves its one flag with
@@ -61,15 +55,6 @@ type NestedDialog = { kind: "optimizer"; optimizerId: string };
 @customElement("helman-node-control")
 export class HelmanNodeControl extends LitElement {
     static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, schedulingSharedStyles, css`
-        .status-line {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 8px 12px;
-        }
-        .status {
-            font-weight: 600;
-        }
         .changes .row {
             font-size: 14px;
         }
@@ -86,16 +71,6 @@ export class HelmanNodeControl extends LitElement {
         .changes .why {
             color: var(--secondary-text-color);
             text-align: end;
-        }
-        .actions {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 8px;
-        }
-        .return {
-            min-height: 36px;
-            padding: 4px 14px;
         }
         .optimizer {
             display: flex;
@@ -127,7 +102,6 @@ export class HelmanNodeControl extends LitElement {
     @property({ attribute: false }) public history: LaneHistory = NO_LANE_HISTORY;
 
     @state() private _dialog: NestedDialog | null = null;
-    @state() private _error: string | null = null;
 
     /** The plan, the coverage and the roster, followed while the section is in the page. */
     private readonly _lanes = new LaneOwnershipController(this, () => this.hass);
@@ -170,9 +144,6 @@ export class HelmanNodeControl extends LitElement {
     render() {
         const lanes = this._lanes;
         const schedule = lanes.snapshot.schedule;
-        const run = schedule ? currentManualRun(lanes.normalized.slots, this.controllableId) : null;
-        const writing = lanes.snapshot.writing;
-        const canAuthor = schedule !== null && this._controllable?.supportsAuthoring === true;
         return html`
             <div class="content" data-control=${this.controllableId}>
                 ${this.titled ? html`<div class="section-title" data-lane-name>${this._controllable?.name ?? this.controllableId}</div>` : nothing}
@@ -180,26 +151,9 @@ export class HelmanNodeControl extends LitElement {
                 ${this._controllable === null ? html`<p class="note" data-not-on-roster>${this._t("not_on_roster")}</p>` : nothing}
                 ${lanes.rosterFailed ? html`<p class="note" data-roster-failed>${this._t("status.unavailable")}</p>` : nothing}
                 ${this._controllable?.supportsAuthoring === false ? html`<p class="note" data-unsupported>${this._t("unsupported_authoring")}</p>` : nothing}
-                ${canAuthor ? html`
-                    <div class="actions">
-                        <button type="button" class="outline-button" data-change ?disabled=${writing} @click=${this._override}>
-                            ${this.localize("node_detail.shared.override")}
-                        </button>
-                        <helman-help-tip .explanation=${this._s("buttons_help")}></helman-help-tip>
-                    </div>
-                ` : nothing}
-                <div class="status-line" role="status">
-                    ${lanes.renderStatus(lanes.status(this.controllableId), this.localize)}
-                    ${run !== null ? html`
-                        <button type="button" class="outline-button return" data-return ?disabled=${writing} @click=${this._returnToAutomatic}>
-                            ${this._t("return_to_automatic")}
-                        </button>
-                    ` : nothing}
-                </div>
                 ${schedule && !schedule.executionEnabled
                     ? html`<p class="note" data-execution-off>${this._t("execution_off_note")}</p>`
                     : nothing}
-                ${this._error ? html`<p class="error" role="alert" data-error>${this._error}</p>` : nothing}
                 ${this._config.isAdmin ? this._renderAutomations() : nothing}
             </div>
             ${this._renderDialog()}
@@ -351,7 +305,6 @@ export class HelmanNodeControl extends LitElement {
 
     /** A nested dialog owns one history entry, so Back closes only it. */
     private _openDialog(dialog: NestedDialog): void {
-        this._error = null;
         this._dialog = dialog;
         this._history.push();
     }
@@ -359,38 +312,6 @@ export class HelmanNodeControl extends LitElement {
     private _onDialogClosed = (): void => {
         this._history.closed();
         this._dialog = null;
-    };
-
-    /** Ask the card hosting the detail to open its day editor on this lane alone. */
-    private _override = (): void => {
-        this._error = null;
-        openScheduleEditorOnLane(this, this.controllableId);
-    };
-
-    /**
-     * Release the user's run in progress back to the automation: its slots
-     * from the one in progress lose this lane's user action, and whatever
-     * the automation decides fills them. Read at the press, so a slot that
-     * elapsed meanwhile is left alone; later separate runs stay.
-     */
-    private _returnToAutomatic = async (): Promise<void> => {
-        const owner = getSharedScheduleOwner(this.hass);
-        const nowMs = Date.now();
-        const slots = owner.getNormalized(this._lanes.timeZone, this._lanes.locale).slots;
-        const run = currentManualRun(slots, this.controllableId);
-        if (run === null) return;
-        this._error = null;
-        const patches = buildEntityScheduleLanePatches({
-            slots,
-            lanes: [{ target: this.controllableId, draft: Object.fromEntries(run.slots.map((slot) => [slot.id, null])) }],
-            nowMs,
-        });
-        const error = await owner.applySchedulePatches(patches);
-        if (error) {
-            this._error = `${this._t("return_failed")} ${error.message}`;
-            return;
-        }
-        showToast(this, this._t("returned"));
     };
 
     /** Switch one optimizer on or off: only its `enabled` changes, against the document read at the press. */

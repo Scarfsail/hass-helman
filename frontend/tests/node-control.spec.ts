@@ -4,15 +4,15 @@ import { treeNode, treePayload } from "./support/payload-builders";
 import type { SchedulePayload } from "../cards/helman-api";
 
 /**
- * The Schedule tab of the inverter and battery details, on the real simple
- * card against a fake backend.
+ * The Schedule section of the inverter and battery details and their
+ * Overview's control tile, on the real simple card against a fake backend.
  *
  * What is pinned: who owns the inverter lane now and how that is worked out
  * (execution, the user's run in progress, the automation coverage, and
- * loading or unavailable before any of it is known); that Override opens the
- * card's day editor on the lane alone, whose save claims its slots even where
- * the automation planned the same, keeping every other lane's user action
- * and never copying an automation's; that returning to automatic clears only
+ * loading or unavailable before any of it is known); that the tile's Override
+ * opens the card's day editor on the lane alone, whose save claims its slots
+ * even where the automation planned the same, keeping every other lane's user
+ * action and never copying an automation's; that Return to plan clears only
  * the run in progress;
  * that an admin's automation switch saves one flag against the revision it
  * read; and the tabs and nested dialogs' keyboard and Back behaviour.
@@ -172,7 +172,10 @@ async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card")
 }
 
 const control = (page: Page) => page.locator("helman-node-control");
-const status = (page: Page) => control(page).locator("[data-status]");
+/** The Overview's control tile, which owns Override and Return to plan. */
+const tile = (page: Page) => page.locator("helman-control-tile");
+/** Who decides the lane, as the control tile says. */
+const status = (page: Page) => tile(page).locator("[data-who] > span:last-child");
 const scheduleSection = (page: Page) => page.locator("node-detail-dialog helman-detail-section[data-schedule]");
 const scheduleButton = (page: Page) => scheduleSection(page).locator("button").first();
 /** The card's day editor, as Override opens it over the detail. */
@@ -183,6 +186,12 @@ async function openControl(page: Page, node: "inverter" | "battery" = "inverter"
     await (node === "inverter" ? page.locator(".inverter-cell") : page.locator(".node-cell:has(simple-card-battery)")).click();
     await scheduleButton(page).click();
     await expect(control(page)).toBeVisible();
+}
+
+/** The inverter's detail, its Overview's control tile in view. */
+async function openTile(page: Page): Promise<void> {
+    await page.locator(".inverter-cell").click();
+    await expect(tile(page)).toBeVisible();
 }
 
 /** The shared clock's tick, as the page becoming visible again delivers it. */
@@ -197,7 +206,7 @@ async function flushDataChanged(page: Page): Promise<void> {
 }
 
 async function openOverride(page: Page): Promise<void> {
-    await control(page).locator("[data-change]").click();
+    await tile(page).locator("[data-override]").click();
     await expect(editor(page).locator(".edit-panel")).toBeVisible();
 }
 
@@ -229,55 +238,52 @@ const closeDayEditor = (page: Page, card = "helman-simple-card") => page.evaluat
 const setScheduleSlots = async (page: Page) => (await requests(page, "helman/set_schedule")).map((r) => r.slots as Array<{ id: string; controllables: unknown }>);
 
 test.describe("who owns the lane", () => {
-    for (const [coverage, text, kind] of [
-        ["active", "Automatic", "automatic"],
-        ["disabled_only", "Automation off", "automation_off"],
-        ["none", "Not automated", "not_automated"],
+    for (const [coverage, text] of [
+        ["active", "Helman's schedule"],
+        ["disabled_only", "Automation off"],
+        ["none", "Not automated"],
     ] as const) {
         test(`coverage ${coverage} reads ${text}`, async ({ page }) => {
             await mount(page, { coverage });
-            await openControl(page);
+            await openTile(page);
             await expect(status(page)).toHaveText(text);
-            await expect(status(page)).toHaveAttribute("data-status", kind);
         });
     }
 
-    test("the user's run in progress is manual until it ends, in the user's authorship tone", async ({ page }) => {
+    test("the user's run in progress is the user's until it ends", async ({ page }) => {
         await mount(page, { schedule: plan([["12:00", "13:00", { inverter: user("stop_export") }]]) });
-        await openControl(page);
-        await expect(status(page)).toHaveText("Manual until Today 13:00");
-        await expect(status(page)).toHaveClass(/authorship-user/);
+        await openTile(page);
+        await expect(status(page)).toHaveText("You, until Today 13:00");
     });
 
     test("execution off wins over a manual run and says no hardware changes", async ({ page }) => {
         await mount(page, { schedule: plan([["12:00", "13:00", { inverter: user("stop_export") }]], { executionEnabled: false }) });
-        await openControl(page);
+        await openTile(page);
         await expect(status(page)).toHaveText("Execution off");
         await expect(control(page).locator("[data-execution-off]")).toContainText("no hardware change");
         // The run can still be released.
-        await expect(control(page).locator("[data-return]")).toBeVisible();
+        await expect(tile(page).locator("[data-return]")).toBeVisible();
     });
 
     test("loading until the schedule answers, never read as no automation", async ({ page }) => {
         await mount(page, { schedule: "pending" });
-        await openControl(page);
+        await openTile(page);
         await expect(status(page)).toHaveText("Loading…");
-        await expect(control(page).locator("[data-change]")).toHaveCount(0);
     });
 
     test("unavailable once the schedule's read failed", async ({ page }) => {
         await mount(page, { schedule: "error" });
-        await openControl(page);
+        await openTile(page);
         await expect(status(page)).toHaveText("Control state unavailable");
     });
 
     test("unavailable, not loading, once the coverage's read failed, and recovered by the next good read", async ({ page }) => {
         await mount(page, { coverageFails: true });
-        await openControl(page);
+        await openTile(page);
         await expect(status(page)).toHaveText("Control state unavailable");
         await page.evaluate(() => { window.__coverageFails = false; window.__fireDataChanged("config"); });
         await flushDataChanged(page);
-        await expect(status(page)).toHaveText("Automatic");
+        await expect(status(page)).toHaveText("Helman's schedule");
     });
 
     test("a failed roster read is unavailable, never read as no controllable", async ({ page }) => {
@@ -285,13 +291,13 @@ test.describe("who owns the lane", () => {
         await openControl(page);
         await expect(control(page).locator("[data-roster-failed]")).toHaveText("Control state unavailable");
         await expect(control(page).locator("[data-not-on-roster]")).toHaveCount(0);
-        await expect(control(page).locator("[data-change]")).toHaveCount(0);
+        await expect(tile(page).locator("[data-override]")).toBeDisabled();
     });
 
     test("a manual run ending tomorrow names its day", async ({ page }) => {
         await mount(page, { schedule: plan([["12:00", "2026-10-22T01:00:00Z", { inverter: user("stop_export") }]]) });
-        await openControl(page);
-        await expect(status(page)).toHaveText("Manual until Tomorrow 01:00");
+        await openTile(page);
+        await expect(status(page)).toHaveText("You, until Tomorrow 01:00");
     });
 
     test("a manual run carries differing user actions and stops at the first automation slot", async ({ page }) => {
@@ -300,22 +306,22 @@ test.describe("who owns the lane", () => {
             ["12:30", "13:00", { inverter: user("charge_to_target_soc", { targetSoc: 80 }) }],
             ["13:15", "14:00", { inverter: user("stop_export") }],
         ]) });
-        await openControl(page);
-        await expect(status(page)).toHaveText("Manual until Today 13:00");
+        await openTile(page);
+        await expect(status(page)).toHaveText("You, until Today 13:00");
     });
 
     test("a manual run stops at a gap in the schedule", async ({ page }) => {
         await mount(page, { schedule: plan([["12:00", "14:00", { inverter: user("stop_export") }]], { skip: ["12:30"] }) });
-        await openControl(page);
-        await expect(status(page)).toHaveText("Manual until Today 12:30");
+        await openTile(page);
+        await expect(status(page)).toHaveText("You, until Today 12:30");
     });
 
     test("the status moves on at the slot boundary", async ({ page }) => {
         await mount(page, { schedule: plan([["12:00", "12:15", { inverter: user("stop_export") }]]) });
-        await openControl(page);
-        await expect(status(page)).toHaveText("Manual until Today 12:15");
+        await openTile(page);
+        await expect(status(page)).toHaveText("You, until Today 12:15");
         await tickAt(page, `${DAY}T12:15:30Z`);
-        await expect(status(page)).toHaveText("Automatic");
+        await expect(status(page)).toHaveText("Helman's schedule");
     });
 
     test("the battery shows the inverter's lane, its strip titled and explained as the inverter's", async ({ page }) => {
@@ -326,7 +332,6 @@ test.describe("who owns the lane", () => {
             .toContain("editing them changes the inverter");
         // One strip, not the inverter's own two rows.
         await expect(control(page).locator("helman-mode-strip [data-row]")).toHaveCount(0);
-        await expect(status(page)).toHaveText("Manual until Today 13:00");
     });
 });
 
@@ -580,7 +585,7 @@ test.describe("the override", () => {
             host._lastSlotMinutes = null;
             host._derivedFor = null;
         });
-        await control(page).locator("[data-change]").click();
+        await tile(page).locator("[data-override]").click();
         expect((await dayEditor(page)).open).toBe(false);
         await page.locator("helman-simple-card").evaluate((card) => {
             (card.shadowRoot!.querySelector("scheduling-day-editor-host") as any).requestUpdate();
@@ -596,7 +601,7 @@ test.describe("the override", () => {
             host._savedControllables = host._controllables;
             host._controllables = [];
         });
-        await control(page).locator("[data-change]").click();
+        await tile(page).locator("[data-override]").click();
         expect((await dayEditor(page)).open).toBe(false);
         await page.locator("helman-simple-card").evaluate((card) => {
             const host = card.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
@@ -641,25 +646,31 @@ test.describe("the override", () => {
             const host = card.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
             host._nowMs = Date.parse("2026-10-22T13:00:00Z");
         });
-        await control(page).locator("[data-change]").click();
+        await tile(page).locator("[data-override]").click();
         await expect.poll(() => page.evaluate(() => window.__toasts)).toEqual(["The schedule has no slot in progress to start from."]);
         expect((await dayEditor(page)).open).toBe(false);
     });
 });
 
-test("Return to automatic clears only the run in progress and keeps a later override and other lanes", async ({ page }) => {
+test("Return to plan in the control tile clears only the run in progress and keeps a later override and other lanes", async ({ page }) => {
     await mount(page, { schedule: plan([
         ["12:00", "12:15", { inverter: user("stop_export"), boiler: { on: true, setBy: "user" } }],
         ["12:15", "12:30", { inverter: user("normal") }],
         ["13:00", "13:30", { inverter: user("stop_charging") }],
     ]) });
     await openControl(page);
-    await control(page).locator("[data-return]").click();
+    // The schedule the write returns: the run in progress released.
+    await page.evaluate((schedule) => { window.__schedule = schedule; }, plan([
+        ["12:00", "12:15", { boiler: { on: true, setBy: "user" } }],
+        ["13:00", "13:30", { inverter: user("stop_charging") }],
+    ]));
+    await tile(page).locator("[data-return]").click();
     await expect.poll(() => setScheduleSlots(page)).toEqual([[
         { id: `${DAY}T12:00:00+00:00`, controllables: { boiler: { on: true } } },
         { id: `${DAY}T12:15:00+00:00`, controllables: {} },
     ]]);
-    expect(await page.evaluate(() => window.__toasts)).toEqual(["Returned to automatic."]);
+    expect(await page.evaluate(() => window.__toasts)).toEqual(["Returned to the plan."]);
+    await expect(tile(page).locator("[data-return]")).toHaveCount(0);
 });
 
 test.describe("the automation rows", () => {
@@ -732,7 +743,7 @@ test.describe("the automation rows", () => {
     test("a non-admin gets the schedule controls without reading the config", async ({ page }) => {
         await mount(page, { admin: false });
         await openControl(page);
-        await expect(status(page)).toHaveText("Automatic");
+        await expect(status(page)).toHaveText("Helman's schedule");
         await expect(control(page).locator("[data-automations]")).toHaveCount(0);
         await openOverride(page);
         await overrideHour(page);
@@ -851,7 +862,7 @@ test.describe("Schedule lane icons in power card editor", () => {
             const detail = page.locator("node-detail-dialog");
             await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Boiler");
             await scheduleButton(page).click();
-            await control(page).locator("[data-change]").click();
+            await tile(page).locator("[data-override]").click();
             await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "boiler", single: true });
             await expect.poll(() => page.evaluate(({ card }) => {
                 const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
@@ -897,7 +908,7 @@ test.describe("on both cards and a phone", () => {
     test("the full card opens the same Schedule tab", async ({ page }) => {
         await mount(page, { schedule: plan([["12:00", "13:00", { inverter: user("stop_export") }]]) }, "helman-card");
         await openControl(page);
-        await expect(status(page)).toHaveText("Manual until Today 13:00");
+        await expect(status(page)).toHaveText("You, until Today 13:00");
     });
 
     test("fits 360 px without sideways scrolling", async ({ page }) => {
@@ -909,5 +920,6 @@ test.describe("on both cards and a phone", () => {
             .every((element) => element.getBoundingClientRect().right <= 360
                 && (element.clientWidth === 0 || element.scrollWidth <= element.clientWidth + 1)));
         expect(await fits("helman-node-control")).toBe(true);
+        expect(await fits("helman-control-tile")).toBe(true);
     });
 });

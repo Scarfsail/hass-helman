@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { ControllableRuntimeDTO, InverterRuntimeDTO, ScheduleActionDTO, ScheduleActionKind, ScheduleControllableActionDTO, SchedulePayload, ScheduleSetBy, ScheduleSlotDTO } from "../helman-api";
+import type { HomeAssistant } from "../../types/ha";
+import type { ControllableRuntimeDTO, InverterDetailPayload, InverterRuntimeDTO, ScheduleActionDTO, ScheduleActionKind, ScheduleControllableActionDTO, SchedulePayload, ScheduleSetBy, ScheduleSlotDTO } from "../helman-api";
 import { fillTemplate, getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import {
     addDaysToDayKey,
@@ -208,6 +209,21 @@ export function laneActionLabel(action: ScheduleControllableActionDTO, localize:
 /** The short name of an inverter mode, as the details and the Schedule strip show it. */
 export function inverterModeLabel(localize: (key: string) => string, kind: ScheduleActionKind): string {
     return localize(`node_detail.inverter.mode_short.${kind}`);
+}
+
+/**
+ * The inverter's mode control as a picker, its options labelled by their
+ * action kind; a pick writes the mode control now and holds until Helman's
+ * next window. None without a mode control. The caller registers
+ * `helman-option-segments`: this module is in the config editor's bundle too.
+ */
+export function renderInverterModePicker(hass: HomeAssistant, localize: LocalizeFunction, mode: InverterDetailPayload["mode"] | undefined) {
+    if (!mode) return nothing;
+    const kindOf = new Map(Object.entries(mode.actionOptions)
+        .filter(([, option]) => option)
+        .map(([kind, option]) => [option!, kind as ScheduleActionKind]));
+    return html`<helman-option-segments data-mode-picker .hass=${hass} .entityId=${mode.entityId} .name=${localize("scheduling.dialog.appliance.mode")}
+        .options=${[...kindOf.keys()]} .label=${(option: string) => inverterModeLabel(localize, kindOf.get(option)!)}></helman-option-segments>`;
 }
 
 /**

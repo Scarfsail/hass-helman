@@ -98,15 +98,14 @@ test("Override opens the inspector's day editor over the device detail on its la
         body.firstElementChild.dispatchEvent(new CustomEvent("show-device-detail", { detail: { item }, bubbles: true, composed: true }));
     });
     const detail = page.locator("helman-solar-inspector node-detail-dialog");
-    await detail.locator("helman-detail-section[data-schedule] button").first().click();
-    await detail.locator("helman-node-control [data-change]").click();
+    await detail.locator("helman-control-tile [data-override]").click();
     await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "boiler", single: true });
     await page.evaluate(() => {
         const host = (window as any).__inspector().shadowRoot.querySelector("scheduling-day-editor-host");
         host.shadowRoot.querySelector("scheduling-entity-day-editor").shadowRoot.querySelector("ha-dialog").close();
     });
     await expect.poll(() => dayEditor(page).then((editor) => editor.open)).toBe(false);
-    await expect(detail.locator("helman-node-control")).toBeVisible();
+    await expect(detail.locator("helman-control-tile")).toBeVisible();
 });
 
 test("a breakdown device's detail shows its breadcrumb and a segment swaps the dialog in place", async ({ page }) => {
@@ -200,8 +199,7 @@ test("remounting device detail from day editor over existing detail preserves hi
     });
     const detail = page.locator("helman-solar-inspector node-detail-dialog");
     await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Boiler");
-    await detail.locator("helman-detail-section[data-schedule] button").first().click();
-    await detail.locator("helman-node-control [data-change]").click();
+    await detail.locator("helman-control-tile [data-override]").click();
     await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "boiler", single: true });
 
     await page.evaluate(() => {

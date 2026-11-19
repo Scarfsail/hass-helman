@@ -17,15 +17,17 @@ import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import { IDLE_W, NodeDetailContentBase } from "./node-detail-base";
 import { readEnergyKWh, readingNumber } from "./node-detail-readings";
 import { readReserve } from "./battery-reserve";
-import { currentRun, inverterModeLabel, inverterRuns, renderCurrentSlot, runtimeFor, runtimeText } from "./node-detail-schedule";
+import { currentRun, inverterRuns, renderCurrentSlot, renderInverterModePicker, runtimeFor, runtimeText } from "./node-detail-schedule";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import { helmanColorVars } from "../color-vars";
 import type { BatteryDetailParams } from "./node-detail-types";
 import { NODE_DETAIL_REQUEST_EVENT } from "./node-detail-types";
 import "../helman-simple/simple-card-battery";
+import "./control-tile";
 import "./detail-headline";
 import "./flow-gauge";
 import "./help-tip";
+import "./option-segments";
 import { boldTemplate, unbrokenUnits } from "./detail-section";
 import { forecastWhen, renderForecastChart } from "./node-detail-forecast";
 import { historyRow, kwhText, sectionNotReady, statTile, subTitle } from "./node-detail-history";
@@ -69,7 +71,8 @@ interface TemperatureToday {
  * The Overview opens on the SoC headline (the battery glyph with its reserve
  * range when known, the charge or discharge power and the range as caption),
  * then the time at the recent rate, the flow gauge, a notice when a ceiling
- * binds, and the tile naming the inverter and the mode it runs now.
+ * binds, and the control tile of the inverter's lane, which the battery is
+ * controlled through, with the inverter's mode picker.
  *
  * History & statistics says what was charged and discharged today, by the
  * battery's own meters (its header), where the charge came from (the
@@ -110,7 +113,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         shown: () => this._historyOpen && this._overview.status === "ready" && !!this._overview.payload.entities.battery_temperature,
     });
 
-    /** The mode the inverter reports, read from its own overview and re-read when its mode registers change. */
+    /** The inverter's overview, for its mode control: re-read when its mode registers change. */
     private _inverterStates = "";
     private readonly _inverter: SectionResource<InverterDetailPayload> = this._section("inverter", {
         // A refresh compares the states as they are when it is sent: a change while it is in flight re-reads.
@@ -174,7 +177,6 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const flow = this.params.flows;
         const lowest = direction === "idle" ? null : this._lowest(this._ceilings(overview, direction === "charge" ? "charge" : "discharge"));
         const binding = lowest && power !== null && Math.abs(power) >= AT_CEILING * lowest.watts;
-        const observed = this._inverter.payload?.agreement.observedOption ?? null;
         return html`
             <div class="content" data-overview>
                 ${this._renderException(overview)}
@@ -199,13 +201,12 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                     <span class="notice-cause">${lowest.source === "bms" && this._celsius(overview, "battery_temperature") !== null && this._celsius(overview, "battery_temperature")! < COLD_C
                         ? fillTemplate(this.localize("node_detail.shared.battery_cold_cause"), { temperature: this._reading(overview, "battery_temperature") ?? "?" })
                         : this._t(`limits.source_${lowest.source}`)}</span></div>` : nothing}
-                <div class="tile" data-inverter-control>
-                    <div class="row"><span class="label">${this.localize("node_detail.shared.controlled_through")}</span>
+                <helman-control-tile .hass=${this.hass} .localize=${this.localize} .controllableId=${INVERTER_CONTROLLABLE_ID}>
+                    <div class="row" slot="leading" data-controlled-through><span class="label">${this.localize("node_detail.shared.controlled_through")}</span>
                         <button type="button" class="link-button inverter-link" aria-label=${this.localize("node_detail.shared.battery_inverter")}
                             @click=${() => this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, { detail: { target: "inverter" }, bubbles: true, composed: true }))}>${this.localize("node_detail.shared.the_inverter")}</button></div>
-                    <div class="row"><span class="label">${this.localize("node_detail.shared.mode_now_label")}</span>
-                        <span class="value">${observed ? inverterModeLabel(this.localize, observed) : "—"}</span></div>
-                </div>
+                    ${renderInverterModePicker(this.hass, this.localize, this._inverter.payload?.mode)}
+                </helman-control-tile>
             </div>
         `;
     }

@@ -69,6 +69,13 @@ export const nodeDetailSharedStyles = css`
         font-size: inherit;
         font-weight: inherit;
     }
+    /* Rows a node slots into its control tile read as the tile's own. */
+    helman-control-tile > .row {
+        font-size: 14px;
+    }
+    helman-control-tile > .row .label {
+        font-size: inherit;
+    }
 
     .detail-row {
         display: flex;

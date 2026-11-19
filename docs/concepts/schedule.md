@@ -48,6 +48,6 @@ Each node's **Schedule** section shows its plan, the execution state and the opt
 
 Before applying, Helman re-checks the slot's [custom conditions](../automation/condition-groups.md#custom-conditions) against live state. If one has stopped holding, the slot is not executed and a new plan is requested.
 
-The inverter's node detail shows the chain for the current slot: what the plan asked, what Helman sent and what the inverter reports.
+The inverter's node detail shows what the inverter reports in its control tile, and the full chain for the current slot in Technical details: what the plan asked, what Helman sent and what the inverter reports.
 
 ![Inverter detail](../assets/images/detail-inverter.png){ .shot .shot--narrow }

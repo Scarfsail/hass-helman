@@ -12,12 +12,20 @@ export interface FlowGaugeItem { node: "solar" | "battery" | "grid" | "house"; p
 /** The house's sources in the gauge's order: what its pills show, live or over a period. */
 export const SOURCE_NODES = ["solar", "battery", "grid"] as const;
 
-/** The three counterparts each node's gauge shows, left to right, whatever flows. */
-export const FLOW_GAUGE_COUNTERPARTS: Record<FlowGaugeItem["node"], readonly FlowGaugeItem["node"][]> = {
+/** The node a gauge belongs to: one of its counterparts, or the inverter they all flow through. */
+export type FlowGaugeOf = FlowGaugeItem["node"] | "inverter";
+
+/**
+ * The three counterparts each node's gauge shows, left to right, whatever
+ * flows. The inverter has a gauge each way: what flows into it, and out of it.
+ */
+export const FLOW_GAUGE_COUNTERPARTS: Record<FlowGaugeItem["node"] | "inverter_from" | "inverter_to", readonly FlowGaugeItem["node"][]> = {
     house: SOURCE_NODES,
     solar: ["house", "battery", "grid"],
     battery: ["house", "solar", "grid"],
     grid: ["house", "battery", "solar"],
+    inverter_from: SOURCE_NODES,
+    inverter_to: ["house", "battery", "grid"],
 };
 
 /** The mdi icon each node's pill shows. */
@@ -73,7 +81,7 @@ export class HelmanFlowGauge extends LitElement {
         button:hover .popup, button:focus-visible .popup { display: block; }
     `];
     /** The node whose detail this is; it fixes the three pills and their order. */
-    @property() public of!: FlowGaugeItem["node"];
+    @property() public of!: FlowGaugeOf;
     /** `flow` names neither way, for a node whose way depends on the flow while nothing flows. */
     @property({ reflect: true }) public direction: "from" | "to" | "flow" = "from";
     @property({ attribute: false }) public items: FlowGaugeItem[] = [];
@@ -91,13 +99,17 @@ export class HelmanFlowGauge extends LitElement {
         syncFlowRates(this.renderRoot);
     }
 
+    private _counterparts(): readonly FlowGaugeItem["node"][] {
+        return FLOW_GAUGE_COUNTERPARTS[this.of === "inverter" ? (this.direction === "to" ? "inverter_to" : "inverter_from") : this.of];
+    }
+
     /** Always the same three pills, so the overview never jumps; an idle one is muted but still opens its node. */
     render() {
         const shown = this._shown;
         const total = shown.reduce((sum, item) => sum + item.powerW, 0);
         return html`<div class="title gauge-title">${this.localize(`node_detail.shared.gauge.${this.direction}`)} · ${this.localize("node_detail.shared.now")}${this.estimated ? ` · ${this.localize("node_detail.shared.estimated")}` : ""}
             ${this.estimated ? html`<helman-help-tip .explanation=${this.localize("node_detail.shared.gauge.estimate_help")}></helman-help-tip>` : nothing}</div>
-            <div class="pills">${FLOW_GAUGE_COUNTERPARTS[this.of].map((node) => {
+            <div class="pills">${this._counterparts().map((node) => {
                 const powerW = shown.find((item) => item.node === node)?.powerW ?? 0;
                 const active = powerW > 0;
                 const pct = active ? Math.max(1, Math.round(powerW / total * 100)) : 0;

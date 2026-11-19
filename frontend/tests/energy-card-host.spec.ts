@@ -57,8 +57,8 @@ test.describe("EnergyCardHost", () => {
             });
 
             await expect(content.locator("helman-detail-headline")).toBeVisible();
-            await expect(content.locator("[data-chain] [data-box]")).toHaveCount(3);
-            await expect(content.locator("[data-chain] [data-box='command'] .box-value")).toHaveText("Normal");
+            await expect(content.locator("helman-flow-gauge")).toHaveCount(2);
+            await expect(content.locator("helman-control-tile [data-inverter-reports]")).toBeVisible();
         });
     }
 

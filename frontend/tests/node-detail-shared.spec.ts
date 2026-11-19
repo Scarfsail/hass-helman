@@ -344,3 +344,65 @@ test("a pill that shows a watt never reads 0 % or an empty fill", async ({ page 
     });
     expect(fill).toBeGreaterThan(0);
 });
+
+/** A select entity's picker, its writes collected in `__picks`. */
+async function mountPicker(page: import("@playwright/test").Page, options: string[], state: string): Promise<void> {
+    await page.evaluate(({ options, state }) => {
+        (window as any).__picks = [];
+        const picker = document.createElement("helman-option-segments") as any;
+        picker.hass = {
+            states: { "select.mode": { entity_id: "select.mode", state, attributes: {} } },
+            callWS: async (request: unknown) => { (window as any).__picks.push(request); },
+        };
+        picker.entityId = "select.mode";
+        picker.options = options;
+        picker.name = "Mode";
+        picker.label = (option: string) => option.toUpperCase();
+        document.getElementById("mount")!.append(picker);
+    }, { options, state });
+}
+
+test("a picker of up to three options is one segmented bar on one line, its live option pressed", async ({ page }) => {
+    await mountPicker(page, ["fast", "eco", "stop"], "eco");
+    const picker = page.locator("helman-option-segments");
+    await expect(picker.locator("select")).toHaveCount(0);
+    const buttons = picker.locator(".segments button");
+    await expect(buttons).toHaveText(["FAST", "ECO", "STOP"]);
+    await expect(picker.locator("[aria-pressed=true]")).toHaveText("ECO");
+    expect(new Set(await buttons.evaluateAll((all) => all.map((button) => button.getBoundingClientRect().top))).size).toBe(1);
+    await buttons.first().click();
+    await expect.poll(() => page.evaluate(() => (window as any).__picks)).toEqual([
+        { type: "call_service", domain: "select", service: "select_option", service_data: { entity_id: "select.mode", option: "fast" } },
+    ]);
+});
+
+test("a picker of more than three options is a named dropdown, its live option picked", async ({ page }) => {
+    await mountPicker(page, ["a", "b", "c", "d"], "c");
+    const picker = page.locator("helman-option-segments");
+    await expect(picker.locator("button")).toHaveCount(0);
+    await expect(picker.locator(".dropdown .name")).toHaveText("Mode");
+    const select = picker.locator("select");
+    await expect(select.locator("option")).toHaveText(["A", "B", "C", "D"]);
+    await expect(select).toHaveValue("c");
+    await select.selectOption("d");
+    await expect.poll(() => page.evaluate(() => (window as any).__picks)).toEqual([
+        { type: "call_service", domain: "select", service: "select_option", service_data: { entity_id: "select.mode", option: "d" } },
+    ]);
+});
+
+test("a picker is disabled while its entity is unreadable, as a bar and as a dropdown", async ({ page }) => {
+    await mountPicker(page, ["a", "b"], "unavailable");
+    await mountPicker(page, ["a", "b", "c", "d"], "unavailable");
+    const pickers = page.locator("helman-option-segments");
+    for (const button of await pickers.nth(0).locator("button").all()) await expect(button).toBeDisabled();
+    await expect(pickers.nth(1).locator("select")).toBeDisabled();
+});
+
+test("a dropdown whose live value is no option shows the placeholder, never the first option", async ({ page }) => {
+    await mountPicker(page, ["a", "b", "c", "d"], "unknown_mode");
+    await mountPicker(page, ["a", "b", "c", "d"], "unavailable");
+    const selects = page.locator("helman-option-segments select");
+    for (const select of await selects.all()) {
+        await expect.poll(() => select.evaluate((el: HTMLSelectElement) => el.selectedOptions[0]?.textContent)).toBe("—");
+    }
+});
