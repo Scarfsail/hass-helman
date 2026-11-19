@@ -27,17 +27,18 @@ import {
     inverterModeLabel,
     inverterRuns,
     renderCurrentSlot,
+    renderInverterModePicker,
     runtimeFor,
     runtimeText,
 } from "./node-detail-schedule";
 import { powerUnitFactor } from "../shared/power-reading";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { InverterDetailParams } from "./node-detail-types";
-import { LaneOwnershipController } from "./lane-ownership";
-import { openScheduleEditorOnLane } from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import { boldTemplate } from "./detail-section";
 import { historyRow, historySummary, renderShowMore, sectionNotReady, subTitle } from "./node-detail-history";
+import "./control-tile";
 import "./detail-headline";
+import "./flow-gauge";
 import "./help-tip";
 import "./option-segments";
 
@@ -60,8 +61,10 @@ interface ChainBox {
  * The inverter detail: what Helman commanded, what the hardware shows, and
  * what comes next.
  *
- * The Overview opens on the mode headline (what the mode does as caption),
- * then the plan → command → inverter chain and the output tile.
+ * The Overview opens on the power through the inverter (its load as caption),
+ * then what flows into and out of it and the control tile: who decides, the
+ * mode the inverter reports and the mode picker. The plan → command →
+ * inverter chain is in Technical details, above the registers.
  *
  * Four facts are kept apart throughout: the schedule's intent (this slot's
  * action), the last command (Helman's mode control), the executor's outcome
@@ -171,13 +174,11 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         .soc-range .meter-fill {
             --meter-accent: var(--helman-battery);
         }
-        .load .meter-fill {
-            --meter-accent: var(--helman-neutral);
-        }
         .inverter-icon.active { animation: inverter-glow 2s ease-in-out infinite; }
         [data-verdict] { margin: 0; color: var(--warning-color, #c27c0e); }
         [data-verdict][data-agrees] { color: var(--success-color, #43a047); }
-        [data-output] ~ .meter { height: 8px; margin: 0; --meter-accent: var(--primary-text-color); }
+        [data-inverter-reports] .agrees { color: var(--success-color, #43a047); }
+        [data-inverter-reports] .differs { color: var(--error-color, #db4437); }
         @keyframes inverter-glow {
             50% { filter: drop-shadow(0 0 8px var(--helman-neutral)); }
         }
@@ -187,11 +188,6 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     protected readonly _node = "inverter" as const;
 
     @property({ attribute: false }) public params!: InverterDetailParams;
-    private readonly _lanes = new LaneOwnershipController(this, () => this.hass);
-    /** Ask the card hosting the detail to open its day editor on the inverter's lane alone. */
-    private _openOverride(): void {
-        openScheduleEditorOnLane(this, INVERTER_CONTROLLABLE_ID);
-    }
 
     /** The inverter's plan. */
     private readonly _plan = this._useSchedule(inverterRuns);
@@ -229,46 +225,36 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     // ── Rendering ───────────────────────────────────────────────────────────
 
     protected _renderOverview(overview: InverterDetailPayload) {
-        const mode = overview.agreement.observedOption;
         const ac = this._acPower(overview);
         const rated = this._watts(overview, "rated_power");
         const pct = ac !== null && rated !== null && rated > 0 ? Math.round(Math.abs(ac) / rated * 100) : null;
-        const controllable = this._lanes.roster?.find((item) => item.id === INVERTER_CONTROLLABLE_ID);
+        const flow = this.params.flows;
+        const agreement = overview.agreement;
+        const mark = agreement.status === "match" ? html` <span class="agrees">✓</span>` : agreement.status === "mismatch" ? html` <span class="differs">✗</span>` : nothing;
         return html`
             <div class="content" data-overview>
                 ${this._renderException(overview)}
-                <helman-detail-headline .value=${mode ? this._modeLabel(mode) : "—"}
-                    .entityId=${overview.mode?.entityId ?? null}
-                    .caption=${mode && mode !== "empty" ? [this.localize("node_detail.shared.mode_now"), this.localize(`node_detail.shared.mode_does.${mode}`)] : [this.localize("node_detail.shared.mode_now")]}>
+                <helman-detail-headline .value=${ac === null ? "—" : formatPower(Math.abs(ac)).display}
+                    .caption=${[this.localize("node_detail.shared.inverter_throughput"),
+                        ...(pct !== null ? [`${pct} % ${this.localize("node_detail.shared.of_rating")} ${formatPower(rated!).display}`] : [])]}>
                     <span slot="icon" class=${`inverter-icon ${ac !== null && Math.abs(ac) > IDLE_W ? "active" : ""}`}>${inverterGlyph()}</span>
                 </helman-detail-headline>
-                <div class="section-title">${this.localize("node_detail.shared.inverter_chain")}
-                    <helman-help-tip .explanation=${this.localize("node_detail.shared.inverter_chain_help")}></helman-help-tip></div>
-                ${this._renderChain(overview)}
-                <div class="tile">
-                    <div class="row" data-output><span class="label">${this.localize("node_detail.shared.output_now")}</span>
-                        <span>${ac === null ? "—" : formatPower(Math.abs(ac)).display}${pct !== null && rated !== null ? html` <span class="label">· ${pct} % ${this.localize("node_detail.shared.of_rating")} ${formatPower(rated).display}</span>` : nothing}</span></div>
-                    ${pct !== null ? html`<span class="meter"><span class="meter-fill" style=${`width:${Math.min(100, pct)}%`}></span></span>` : nothing}
-                    <div class="row"><span class="label">${this.localize("node_detail.shared.temperature")}</span><span>${this._reading(overview, "inverter_temperature") ?? "—"}</span></div>
-                </div>
-                ${this._renderModePicker(overview)}
-                <button type="button" class="outline-button" ?disabled=${!controllable?.supportsAuthoring} @click=${this._openOverride}>${this.localize("node_detail.shared.override_mode")}</button>
+                <helman-flow-gauge of="inverter" direction="from" data-gauge="into" .localize=${this.localize} .items=${flow ? [
+                    { node: "solar", powerW: flow.solarToHouse + flow.solarToBattery + flow.solarToGrid },
+                    { node: "battery", powerW: flow.batteryToHouse + flow.batteryToGrid },
+                    { node: "grid", powerW: flow.gridToBattery },
+                ] : []}></helman-flow-gauge>
+                <helman-flow-gauge of="inverter" direction="to" data-gauge="out" .localize=${this.localize} .items=${flow ? [
+                    { node: "house", powerW: flow.solarToHouse + flow.batteryToHouse },
+                    { node: "battery", powerW: flow.solarToBattery + flow.gridToBattery },
+                    { node: "grid", powerW: flow.solarToGrid + flow.batteryToGrid },
+                ] : []}></helman-flow-gauge>
+                <helman-control-tile .hass=${this.hass} .localize=${this.localize} .controllableId=${INVERTER_CONTROLLABLE_ID}>
+                    <div class="row" data-inverter-reports><span class="label">${this._t("chain.inverter")}</span><span>${this._observedText(overview)}${mark}</span></div>
+                    ${renderInverterModePicker(this.hass, this.localize, overview.mode)}
+                </helman-control-tile>
             </div>
         `;
-    }
-
-    /**
-     * The mode control's options as buttons, labelled by their action kind; a
-     * pick writes the mode control now and holds until Helman's next window.
-     * None without a mode control.
-     */
-    private _renderModePicker(overview: InverterDetailPayload) {
-        if (!overview.mode) return nothing;
-        const kindOf = new Map(Object.entries(overview.mode.actionOptions)
-            .filter(([, option]) => option)
-            .map(([kind, option]) => [option!, kind as ScheduleActionKind]));
-        return html`<helman-option-segments data-mode-picker .hass=${this.hass} .entityId=${overview.mode.entityId}
-            .options=${[...kindOf.keys()]} .label=${(option: string) => this._modeLabel(kindOf.get(option)!)}></helman-option-segments>`;
     }
 
     /** A fault or off-grid operation the hardware reports, else a reported mismatch. */
@@ -349,7 +335,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         };
         const inverter: ChainBox = {
             key: "inverter",
-            value: observed ? this._modeLabel(observed) : agreement.status === "mismatch" ? this._t("chain.other_mode") : "–",
+            value: this._observedText(overview),
             detail: this._t(agreement.status === "match" ? "chain.match"
                 : agreement.status === "mismatch" ? "chain.mismatch"
                 : agreement.reason === "no_profile" ? "chain.not_read"
@@ -499,7 +485,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
 
     // Technical details ---------------------------------------------------------
 
-    /** The registers against the last command, what the executor did, the inverter's configuration and its link. */
+    /** The plan → command → inverter chain, the registers against the last command, what the executor did, the inverter's configuration and its link. */
     protected _renderTechnical(overview: InverterDetailPayload) {
         const now = Date.now();
         const runtime = runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, now);
@@ -507,6 +493,9 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const registers = overview.agreement.registers;
         const t = (key: string) => this.localize(`node_detail.shared.technical.${key}`);
         return html`
+            <div class="section-title">${this.localize("node_detail.shared.inverter_chain")}
+                <helman-help-tip .explanation=${this.localize("node_detail.shared.inverter_chain_help")}></helman-help-tip></div>
+            ${this._renderChain(overview)}
             ${registers.length ? html`
                 ${subTitle(this._t("why.registers"))}
                 <table data-registers>
@@ -550,6 +539,12 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const high = this._number(overview, "battery_max_soc");
         if (low === null && high === null) return null;
         return (low ?? "?") + "–" + (high ?? "?") + " %";
+    }
+
+    /** The mode the inverter reports, as read from its registers. */
+    private _observedText(overview: InverterDetailPayload): string {
+        const observed = overview.agreement.observedOption;
+        return observed ? this._modeLabel(observed) : overview.agreement.status === "mismatch" ? this._t("chain.other_mode") : "–";
     }
 
     private _commandedKind(overview: InverterDetailPayload): ScheduleActionKind | null {

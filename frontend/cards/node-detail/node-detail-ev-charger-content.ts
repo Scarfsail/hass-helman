@@ -41,7 +41,7 @@ import { consumerHistoryFallback, consumerHistorySummary, deviceStatsSection, no
 import { defaultPeriod, type HistoryPeriod } from "./history-period-picker";
 import "./switch-tile";
 import "./ev-mode-control";
-import "./who-decides";
+import "./control-tile";
 import { boldTemplate } from "./detail-section";
 import {
     deviceForecastSummary, forecastWhen, holdAtSlots, powerHistorySection, projectedSlots, readEntityReadings, renderDevicePowerChart, renderForecastChart, stillAhead,
@@ -101,7 +101,8 @@ type Completion =
  *
  * The Overview opens on the power headline (the charger's switch as its icon,
  * the charging state and the session's energy as caption), then the estimated
- * source mix, who decides the charger now, and the selected car's tile: its
+ * source mix, the control tile (who decides the charger now and its mode
+ * control), and the selected car's tile: its
  * SoC against the limit, the energy still needed and the time at this power.
  *
  * Live readings come from `hass` and the house's live split from the card;
@@ -294,9 +295,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                         .entityId=${direct.switchEntityId} fallbackIcon="mdi:car-electric"></helman-switch-tile>`
                         : html`<ha-icon slot="icon" icon="mdi:car-electric"></ha-icon>`}
                 </helman-detail-headline>
-                ${this._renderModeControl(overview)}
                 <helman-flow-gauge of="house" direction="from" .items=${estimatedConsumerMix(this.params.flows, power)} .estimated=${true} .localize=${this.localize}></helman-flow-gauge>
-                <helman-who-decides .hass=${this.hass} .localize=${this.localize} .controllableId=${this.deviceId}></helman-who-decides>
+                <helman-control-tile .hass=${this.hass} .localize=${this.localize} .controllableId=${this.deviceId}>${this._renderModeControl(overview)}</helman-control-tile>
                 ${this._renderCarTile(overview, selection)}
             </div>
         `;

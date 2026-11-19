@@ -8,8 +8,9 @@ import { test, expect, type Page } from "@playwright/test";
  *
  * Mounted on the real `helman-simple-card` against a fake backend that answers
  * the device tree, the schedule and `helman/get_node_detail`. What is pinned is
- * the pictured overview (the plan → command → inverter chain, the mode strip,
- * the flow and the tiles), the shared disclosure contract (one open answer,
+ * the overview (the power through the inverter, what flows into and out of
+ * it, and the control tile), the plan → command → inverter chain in Technical
+ * details, the mode strip, the shared disclosure contract (one open answer,
  * answer then evidence, keyboard, nothing heavy mounted or requested while
  * closed) and the inverter's truthfulness: the last command, the observed
  * registers, the plan and the executor are four facts and are never shown as
@@ -260,17 +261,68 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
 
 const content = (page: Page) => page.locator("node-detail-inverter-content");
 
-test("inverter Overview shows the P1 detail layout", async ({ page }) => {
+/** The chain, in Technical details: an admin's, opened. */
+async function openChain(page: Page) {
+    await page.locator(".inverter-cell").click();
+    const section = content(page).locator("helman-detail-section[data-technical]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-chain]")).toBeVisible();
+    return section;
+}
+
+/** Each pill of a gauge: its figure, in the gauge's fixed order. */
+const pills = (page: Page, gauge: "into" | "out") => content(page).locator(`helman-flow-gauge[data-gauge=${gauge}] .pill`).evaluateAll((buttons) =>
+    buttons.map((button) => [button.querySelector("ha-icon")!.getAttribute("icon"), (button.querySelector(".gauge-figure") as HTMLElement).innerText]));
+
+test("inverter Overview: the power headline with its load, the gauges into and out of it, then the control tile; the chain is not on it", async ({ page }) => {
     await mount(page);
     await page.locator(".inverter-cell").click();
     const c = content(page);
-    await expect(c.locator("[data-overview]")).toBeVisible();
-    await expect(c.locator("helman-detail-headline")).toBeVisible();
-    await expect(c.locator("[data-chain] [data-box]")).toHaveCount(3);
-    await expect(c.locator("[data-verdict]")).toBeVisible();
+    const overview = c.locator("[data-overview]");
+    await expect(overview).toBeVisible();
+    await expect(c.locator("helman-detail-headline")).toContainText("3.5 kW");
+    await expect(c.locator("helman-detail-headline")).toContainText("throughput now");
+    await expect(c.locator("helman-detail-headline")).toContainText("35 % of 10.0 kW");
+    expect(await overview.evaluate((el) => Array.from(el.children).map((child) => child.getAttribute("data-gauge") ?? child.tagName.toLowerCase())))
+        .toEqual(["helman-detail-headline", "into", "out", "helman-control-tile"]);
+    await expect(c.locator("helman-flow-gauge[data-gauge=into] .gauge-title")).toContainText("Coming from");
+    await expect(c.locator("helman-flow-gauge[data-gauge=out] .gauge-title")).toContainText("Going to");
+    const reports = c.locator("helman-control-tile [data-inverter-reports] > span");
+    await expect(reports).toHaveText(["Inverter reports", "Normal ✓"]);
+    await expect(overview.locator("[data-chain], [data-verdict], [data-output]")).toHaveCount(0);
 });
 
-/** The simple card's day editor, as Override mode opens it over the detail. */
+test("inverter gauges: into it from solar, the battery and the grid's charge; out of it to the house, the battery and the grid", async ({ page }) => {
+    // Solar covers the house and charges the battery with the rest; the grid charges what solar does not cover.
+    await mount(page, { solar: "2000", house: "1500", battery: "1000", grid: "500" });
+    await page.locator(".inverter-cell").click();
+    expect(await pills(page, "into")).toEqual([
+        ["mdi:white-balance-sunny", "2.0 kW 80 %"], ["mdi:battery", "0 W"], ["mdi:transmission-tower", "500 W 20 %"],
+    ]);
+    expect(await pills(page, "out")).toEqual([
+        ["mdi:home", "1.5 kW 60 %"], ["mdi:battery", "1.0 kW 40 %"], ["mdi:transmission-tower", "0 W"],
+    ]);
+});
+
+test("inverter gauges: a discharging battery flows in, and what the house does not use flows out to the grid", async ({ page }) => {
+    await mount(page);
+    await page.locator(".inverter-cell").click();
+    expect(await pills(page, "into")).toEqual([
+        ["mdi:white-balance-sunny", "4.2 kW 89 %"], ["mdi:battery", "500 W 11 %"], ["mdi:transmission-tower", "0 W"],
+    ]);
+    expect(await pills(page, "out")).toEqual([
+        ["mdi:home", "1.2 kW 26 %"], ["mdi:battery", "0 W"], ["mdi:transmission-tower", "3.5 kW 74 %"],
+    ]);
+});
+
+test("inverter reports a mismatch with a cross in the control tile", async ({ page }) => {
+    await mount(page, { agreement: "mismatch" });
+    await page.locator(".inverter-cell").click();
+    await expect(content(page).locator("helman-control-tile [data-inverter-reports] > span").last()).toHaveText("another mode ✗");
+    await expect(content(page).locator("helman-control-tile [data-inverter-reports] .differs")).toHaveCount(1);
+});
+
+/** The simple card's day editor, as Override opens it over the detail. */
 const editor = (page: Page) => page.locator("scheduling-entity-day-editor");
 const editorState = (page: Page) => page.evaluate(async () => {
     const host = document.querySelector("helman-simple-card")!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
@@ -279,10 +331,10 @@ const editorState = (page: Page) => page.evaluate(async () => {
     return { open: editor?.open === true, selected: editor?._selectedLaneKey ?? null, single: editor?.single === true };
 });
 
-test("Overview's Override mode opens the editor on the inverter alone and saves a claimed hour", async ({ page }) => {
+test("the control tile's Override opens the editor on the inverter alone and saves a claimed hour", async ({ page }) => {
     await mount(page);
     await page.locator(".inverter-cell").click();
-    await content(page).getByRole("button", { name: /Override mode/ }).click();
+    await content(page).locator("helman-control-tile [data-override]").click();
     await expect.poll(() => editorState(page)).toEqual({ open: true, selected: "inverter", single: true });
     await expect.poll(() => editor(page).locator("ha-dialog").evaluate((dialog: any) => dialog.heading)).toBe("Schedule · Inverter");
     await expect(editor(page).locator("scheduling-entity-day-band .lane")).toHaveCount(1);
@@ -297,10 +349,10 @@ test("Overview's Override mode opens the editor on the inverter alone and saves 
     }))]);
 });
 
-test("Back closes the Overview mode override and keeps the inverter detail", async ({ page }) => {
+test("Back closes the Overview's override and keeps the inverter detail", async ({ page }) => {
     await mount(page);
     await page.locator(".inverter-cell").click();
-    await content(page).getByRole("button", { name: /Override mode/ }).click();
+    await content(page).locator("helman-control-tile [data-override]").click();
     await expect.poll(() => editorState(page).then((state) => state.open)).toBe(true);
     await expect.poll(() => page.evaluate(() => window.history.state?.__helmanEntityScheduleDialogId)).toBeTruthy();
     await page.evaluate(() => window.history.back());
@@ -318,80 +370,82 @@ test("inverter condition remains visible without a dead Details button", async (
     await expect(warning.locator("button")).toHaveCount(0);
 });
 
-test("inverter verdict distinguishes agreement and mismatch", async ({ page }) => {
-    await mount(page, { profile: true, agreement: "match" });
-    await page.locator(".inverter-cell").click();
-    await expect(content(page).locator("[data-verdict]")).toContainText("Everything agrees");
-    await expect(content(page).locator("[data-output]")).toContainText("Output now (AC)");
+test("inverter Technical details: the chain above the registers, its verdict agreeing", async ({ page }) => {
+    await mount(page, { profile: true, agreement: "match", admin: true });
+    const section = await openChain(page);
+    await expect(section.locator("[data-chain] [data-box]")).toHaveCount(3);
+    await expect(section.locator("[data-verdict]")).toContainText("Everything agrees");
+    expect(await section.locator("[data-chain], [data-registers]").evaluateAll((els) => els.map((el) => el.hasAttribute("data-chain") ? "chain" : "registers"))).toEqual(["chain", "registers"]);
 });
 
 test("inverter does not claim agreement when the plan differs from the last command", async ({ page }) => {
-    await mount(page, { plannedChargeNow: true });
-    await page.locator(".inverter-cell").click();
+    await mount(page, { plannedChargeNow: true, admin: true });
+    await openChain(page);
     await expect(content(page).locator("[data-verdict]")).toContainText("last command differs from the plan");
 });
 
 test("inverter verdict says a hand-picked mode holds instead of a plan mismatch", async ({ page }) => {
-    await mount(page, { manualModeNow: true });
-    await page.locator(".inverter-cell").click();
+    await mount(page, { manualModeNow: true, admin: true });
+    await openChain(page);
     const verdict = content(page).locator("[data-verdict]");
     await expect(verdict).toContainText("Set by hand — kept until Helman's next planned window");
     await expect(verdict).not.toContainText("last command differs from the plan");
 });
 
-test("inverter Overview's mode picker shows the configured modes, the commanded one pressed, and a click sets the mode", async ({ page }) => {
+test("inverter control tile's mode dropdown lists the configured modes, the commanded one picked, and a pick sets the mode", async ({ page }) => {
     await mount(page);
     await page.locator(".inverter-cell").click();
-    const picker = content(page).locator("[data-mode-picker]");
-    await expect(picker.locator("button")).toHaveText(["Normal", "No charging", "No discharging", "Charging", "Discharging", "No export"]);
-    await expect(picker.locator("[aria-pressed=true]")).toHaveText("Normal");
-    for (const button of await picker.locator("button").all()) await expect(button).toBeEnabled();
+    const picker = content(page).locator("helman-control-tile [data-mode-picker]");
+    await expect(picker.locator(".segments")).toHaveCount(0);
+    const select = picker.locator("ha-select");
+    await expect(select.locator("[data-label]")).toHaveText("Mode");
+    await expect(select.locator("[data-item]")).toHaveText(["Normal", "No charging", "No discharging", "Charging", "Discharging", "No export"]);
+    await expect(select).toHaveJSProperty("value", "normal");
+    await expect(select.locator("[data-value]")).toHaveText("Normal");
+    await expect(select).toHaveJSProperty("disabled", false);
 
-    await picker.locator("button").filter({ hasText: "No export" }).click();
+    await select.locator("[data-item=stop_export]").click();
     await expect.poll(() => page.evaluate(() => window.__InverterRequests.filter((r) => r.type === "call_service"))).toEqual([
         { type: "call_service", domain: "select", service: "select_option", service_data: { entity_id: "select.helman_inverter_mode", option: "stop_export" } },
     ]);
 });
 
-test("inverter Overview's mode picker is disabled while the mode control is unreadable", async ({ page }) => {
+test("inverter control tile's mode dropdown is disabled while the mode control is unreadable", async ({ page }) => {
     await mount(page, { modeUnavailable: true });
     await page.locator(".inverter-cell").click();
-    const buttons = content(page).locator("[data-mode-picker] button");
-    await expect(buttons).toHaveCount(6);
-    for (const button of await buttons.all()) await expect(button).toBeDisabled();
+    await expect(content(page).locator("[data-mode-picker] ha-select")).toHaveJSProperty("disabled", true);
 });
 
 test("inverter Overview has no mode picker without a mode control", async ({ page }) => {
     await mount(page, { noMode: true });
     await page.locator(".inverter-cell").click();
-    await expect(content(page).locator("[data-verdict]")).toBeVisible();
+    await expect(content(page).locator("helman-control-tile [data-inverter-reports]")).toBeVisible();
     await expect(content(page).locator("[data-mode-picker]")).toHaveCount(0);
 });
 
 test("inverter agrees when a charge to target holds the battery at its reached target", async ({ page }) => {
-    await mount(page, { targetReachedNow: true });
-    await page.locator(".inverter-cell").click();
-    const c = content(page);
+    await mount(page, { targetReachedNow: true, admin: true });
+    const c = await openChain(page);
     await expect(c.locator("[data-verdict]")).toContainText("Everything agrees");
     await expect(c.locator("[data-verdict]")).not.toContainText("Not applied");
     await expect(c.locator("[data-box=plan]")).toContainText("Target SoC reached");
 });
 
 test("inverter reports disabled execution in its verdict", async ({ page }) => {
-    await mount(page, { executionEnabled: false });
-    await page.locator(".inverter-cell").click();
+    await mount(page, { executionEnabled: false, admin: true });
+    await openChain(page);
     await expect(content(page).locator("[data-verdict]")).toContainText("execution off");
 });
 
 test("inverter candidate is judged by its effective normal action", async ({ page }) => {
-    await mount(page, { candidateNow: true });
-    await page.locator(".inverter-cell").click();
+    await mount(page, { candidateNow: true, admin: true });
+    await openChain(page);
     await expect(content(page).locator("[data-verdict]")).toContainText("Everything agrees");
 });
 
 test("inverter does not claim agreement when the current command failed", async ({ page }) => {
-    await mount(page, { runtimeFailed: true });
-    await page.locator(".inverter-cell").click();
+    await mount(page, { runtimeFailed: true, admin: true });
+    await openChain(page);
     await expect(content(page).locator("[data-verdict]")).toContainText("scheduled command failed");
 });
 

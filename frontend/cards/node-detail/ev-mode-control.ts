@@ -7,8 +7,8 @@ import { evModeLabel } from "./node-detail-utils";
 import "./option-segments";
 
 /**
- * The EV charger's use mode and, in ECO, its eco gear, as segmented buttons
- * that set the charger's selects. The pressed button follows the live state.
+ * The EV charger's use mode and, in ECO, its eco gear, each a picker that
+ * sets the charger's select. The picked option follows the live state.
  * While a plan window sets the mode, `lockedCaption` disables both rows and
  * says why: the executor would revert a hand-set mode.
  */
@@ -29,9 +29,10 @@ export class HelmanEvModeControl extends LitElement {
     /** Why the plan holds the mode, which disables both rows; `null` while no window sets it. */
     @property({ attribute: false }) public lockedCaption: string | null = null;
 
-    private _row(entityId: string, options: string[], label: (option: string) => string, kind: string) {
+    private _row(entityId: string, options: string[], label: (option: string) => string, kind: "use_mode" | "eco_gear") {
         return html`<helman-option-segments data-ev-mode-row=${kind} .hass=${this.hass} .entityId=${entityId}
-            .options=${options} .label=${label} .disabled=${this.lockedCaption !== null}></helman-option-segments>`;
+            .options=${options} .label=${label} .name=${this.localize(`scheduling.dialog.appliance.${kind === "use_mode" ? "mode" : kind}`)}
+            .disabled=${this.lockedCaption !== null}></helman-option-segments>`;
     }
 
     render() {

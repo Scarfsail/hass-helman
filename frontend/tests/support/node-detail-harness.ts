@@ -2,6 +2,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { installMockHass, type MockReplies, type MockRequest } from "./mock-hass";
 import { FIXED_NOW_ISO, installFixedClock } from "./fixed-clock";
 import { HA_DIALOG_STUB } from "./ha-dialog-stub";
+import { HA_SELECT_STUB } from "./ha-select-stub";
 import { CARD_BUNDLE } from "./card-page";
 import { cardTree } from "./payload-builders";
 export { treeNode } from "./payload-builders";
@@ -49,6 +50,7 @@ export async function prepareNodeDetailPage(page: Page): Promise<void> {
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
     await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await page.addScriptTag({ content: HA_SELECT_STUB });
     await page.addScriptTag({ content: `window.__nodeDetailState = ${state.toString()}; window.__inverterOverview = ${inverterOverview.toString()};` });
     await page.evaluate(() => {
         window.__configureNodeDetail = (options) => {

@@ -45,14 +45,8 @@ type Variant = {
     house?: string;
     grid?: string;
     soc?: string;
-    /** The slot in progress holds a charge candidate whose condition is not met. */
-    candidateNow?: boolean;
-    /** Schedule execution is switched off. */
-    executionOff?: boolean;
-    /** The slot in progress plans a charge that would apply if execution were on. */
-    chargeNow?: boolean;
-    /** The mode the inverter reports; `normal` unless given, `null` when it reads none. */
-    observed?: string | null;
+    /** The inverter offers its mode control, which reads "stop_discharging". */
+    modeControl?: boolean;
     /** The planned SoC at the end of each 15-minute slot from 12:00, and whether the slot hits the floor or the ceiling. */
     socPath?: Array<{ soc: number; min?: boolean; max?: boolean }>;
     /** The forecast's SoC now; 67 unless given. */
@@ -159,14 +153,12 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             const hour = at.getUTCHours() + (at.getUTCDate() - 21) * 24;
             let action: ScheduleActionDTO = { kind: "normal", setBy: "automation" };
             if (hour >= 14 && hour < 16) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
-            if (v.chargeNow && hour === 12) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
-            if (v.candidateNow && hour === 12) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation", conditionMet: false };
             if (hour >= 18 && hour < 19) action = { kind: "discharge_to_target_soc", targetSoc: 30, setBy: "automation", conditionMet: false };
             slots.push({ id, controllables: { inverter: action } });
         }
         const schedule: SchedulePayload = {
             ...scheduleDefaults,
-            executionEnabled: !v.executionOff,
+            executionEnabled: true,
             slots,
             runtime: {
                 activeSlotId: "2026-10-21T12:00:00+00:00",
@@ -197,8 +189,11 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     : [forecastSlot(`${day}T12:00:00+00:00`, 66), forecastSlot(`${day}T12:15:00+00:00`, 64)],
             },
         };
+        const kinds = ["normal", "stop_charging", "stop_discharging", "charge_to_target_soc", "discharge_to_target_soc", "stop_export"];
+        if (v.modeControl) states["select.helman_inverter_mode"] = s("stop_discharging");
         const inverter = window.__inverterOverview({
-            agreement: { status: "match", reason: null, commanded: null, observedOption: v.observed === undefined ? "normal" : v.observed, observedFrom: [], registers: [] },
+            agreement: { status: "match", reason: null, commanded: null, observedOption: "normal", observedFrom: [], registers: [] },
+            mode: v.modeControl ? { entityId: "select.helman_inverter_mode", actionOptions: Object.fromEntries(kinds.map((kind) => [kind, kind])) } : null,
         });
         window.__moreInfo = [];
         document.addEventListener("hass-more-info", (event) => window.__moreInfo.push((event as CustomEvent).detail.entityId));
@@ -231,26 +226,25 @@ test("battery Overview has SoC, recent-rate estimate, destination gauge and inve
     await expect(page.locator("node-detail-inverter-content")).toBeVisible();
 });
 
-test("battery mode now shows the mode the inverter reports while an unmet candidate is planned", async ({ page }) => {
-    await mount(page, { candidateNow: true });
+test("battery's control tile is the inverter's lane: controlled through it, who decides, and its mode dropdown", async ({ page }) => {
+    await mount(page, { modeControl: true });
     await openDetail(page);
-    const mode = content(page).locator("[data-inverter-control] .row").nth(1).locator(".value");
-    await expect(mode).toHaveText("Normal");
-    await expect(mode).not.toContainText("Charg");
+    const tile = content(page).locator("helman-control-tile");
+    await expect(tile).toHaveCount(1);
+    await expect(tile.locator("[data-control-tile=inverter]")).toHaveCount(1);
+    // Controlled through comes first, then the tile's own rows, then the mode picker.
+    expect(await tile.evaluate((el) => Array.from(el.shadowRoot!.querySelectorAll("slot")).map((slot) => slot.assignedElements().map((e) => e.hasAttribute("data-controlled-through") ? "through" : e.tagName.toLowerCase())))).toEqual([["through"], ["helman-option-segments"]]);
+    const picker = tile.locator("[data-mode-picker]");
+    await expect(picker.locator("ha-select")).toHaveJSProperty("value", "stop_discharging");
+    await expect(picker.locator("ha-select [data-value]")).toHaveText("No discharging");
+    await expect(tile.locator("[data-override]")).toHaveText("Override…");
 });
 
-test("battery mode now shows the inverter's mode, not the planned charge, while execution is off", async ({ page }) => {
-    await mount(page, { executionOff: true, chargeNow: true, observed: "normal" });
+test("battery has no mode picker without the inverter's mode control", async ({ page }) => {
+    await mount(page);
     await openDetail(page);
-    const mode = content(page).locator("[data-inverter-control] .row").nth(1).locator(".value");
-    await expect(mode).toHaveText("Normal");
-    await expect(mode).not.toContainText("Charg");
-});
-
-test("battery mode now shows a dash when the inverter reports no mode", async ({ page }) => {
-    await mount(page, { observed: null });
-    await openDetail(page);
-    await expect(content(page).locator("[data-inverter-control] .row").nth(1).locator(".value")).toHaveText("—");
+    await expect(content(page).locator("helman-control-tile")).toHaveCount(1);
+    await expect(content(page).locator("[data-mode-picker]")).toHaveCount(0);
 });
 
 for (const first of ["battery", "inverter"] as const) {
@@ -267,10 +261,7 @@ for (const first of ["battery", "inverter"] as const) {
                 const answer = await original(request);
                 await hold;
                 if (request.node !== "inverter") return answer;
-                // The inverter reports whatever its mode register reads when asked.
-                const charging = ((window as any).__currentHass ?? hass).states["select.helman_inverter_mode"]?.state === "charge";
-                return { ...answer, mode: { entityId: "select.helman_inverter_mode", actionOptions: {} },
-                    agreement: { ...answer.agreement, observedOption: charging ? "charge_to_target_soc" : "normal" } };
+                return { ...answer, mode: { entityId: "select.helman_inverter_mode", actionOptions: { normal: "idle", charge_to_target_soc: "charge" } } };
             };
             hass.states["select.helman_inverter_mode"] = { entity_id: "select.helman_inverter_mode", state: "idle", attributes: {}, last_changed: "", last_updated: "", context: { id: "" } };
             void first;
@@ -281,7 +272,7 @@ for (const first of ["battery", "inverter"] as const) {
             await expect.poll(() => page.evaluate((n) => window.__NodeDetailRequests.some((r) => r.type === "helman/get_node_detail" && r.node === n && !r.section), node)).toBe(true);
             await page.evaluate((n) => (window as any).__releaseOverview(n), node);
         }
-        const mode = content(page).locator("[data-inverter-control] .row").nth(1).locator(".value");
+        const mode = content(page).locator("[data-mode-picker] [aria-pressed=true]");
         await expect(mode).toHaveText("Normal");
         await expect(content(page).locator("[data-estimate]")).toContainText("4 h");
         const change = (entity: string, state: string) => page.evaluate(({ entity, state }) => {
@@ -321,7 +312,7 @@ test("a mode register that changes while the inverter read is in flight reads th
         hass.states["select.helman_inverter_mode"] = { entity_id: "select.helman_inverter_mode", state: "idle", attributes: {}, last_changed: "", last_updated: "", context: { id: "" } };
     });
     await openDetail(page);
-    await expect(content(page).locator("[data-inverter-control]")).toHaveCount(1);
+    await expect(content(page).locator("helman-control-tile")).toHaveCount(1);
     const change = (state: string) => page.evaluate((state) => {
         const card = document.querySelector("helman-simple-card") as any;
         const hass = (window as any).__currentHass ?? window.__BatteryHass;
@@ -339,7 +330,7 @@ test("a mode register that changes while the inverter read is in flight reads th
     await expect.poll(inverterReads).toBe(before + 2);
 });
 
-test("battery backs off retrying a failed inverter read and shows a dash", async ({ page }) => {
+test("battery backs off retrying a failed inverter read and offers no mode picker", async ({ page }) => {
     await mount(page);
     await page.evaluate(() => {
         const hass = window.__BatteryHass;
@@ -353,8 +344,8 @@ test("battery backs off retrying a failed inverter read and shows a dash", async
     const calls = () => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "inverter" && !r.section).length);
     const before = await calls();
     await openDetail(page);
-    const mode = content(page).locator("[data-inverter-control] .row").nth(1).locator(".value");
-    await expect(mode).toHaveText("—");
+    const mode = content(page).locator("[data-mode-picker]");
+    await expect(mode).toHaveCount(0);
     for (let i = 0; i < 3; i += 1) {
         await page.evaluate((i) => {
             const card = document.querySelector("helman-simple-card") as any;
@@ -363,7 +354,7 @@ test("battery backs off retrying a failed inverter read and shows a dash", async
         await page.waitForTimeout(100);
     }
     expect(await calls() - before).toBe(1);
-    await expect(mode).toHaveText("—");
+    await expect(mode).toHaveCount(0);
 });
 
 test("battery headline, gauge and power card agree where the grid meter disagrees with the balance", async ({ page }) => {
