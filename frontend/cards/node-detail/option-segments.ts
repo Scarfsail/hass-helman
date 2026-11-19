@@ -1,6 +1,5 @@
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { live } from "lit/directives/live.js";
 import type { HomeAssistant } from "../../types/ha";
 import { describeError } from "../shared/describe-error";
 import { isReadableState } from "../shared/power-reading";
@@ -10,7 +9,9 @@ export const MAX_SEGMENTS = 3;
 
 /**
  * One select entity's options on a single line: a segmented bar while they
- * fit, a dropdown named `name` when there are more. The picked option
+ * fit, Home Assistant's own select named `name` when there are more. The
+ * select shows a value that is no option as it is, so an unknown live state
+ * reads as a dash rather than as the first option. The picked option
  * follows the live state; a pick sets the option through the entity's own
  * domain, and a failed pick is said under the line. The picker is disabled
  * while the entity is unreadable, or when the caller says so.
@@ -27,14 +28,9 @@ export class HelmanOptionSegments extends LitElement {
         .segments button[aria-pressed="true"] { color: var(--primary-color);
             background: color-mix(in srgb, var(--primary-color) 18%, transparent); }
         .segments button:hover:not(:disabled):not([aria-pressed="true"]) { background: color-mix(in srgb, var(--primary-text-color) 6%, transparent); }
-        .dropdown { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 38px;
-            padding: 0 10px; border: 1px solid var(--divider-color); border-radius: 8px; background: var(--card-background-color); font-size: 14px; }
-        .dropdown .name { flex: none; font-weight: 600; }
-        .dropdown select { min-width: 0; padding: 8px 0; border: 0; background: none; color: inherit; font: inherit;
-            font-weight: 600; text-align: end; cursor: pointer; }
-        .dropdown select option { background: var(--card-background-color); color: var(--primary-text-color); }
-        button:focus-visible, select:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }
-        button:disabled, select:disabled { opacity: 0.5; cursor: not-allowed; }
+        ha-select { display: block; }
+        button:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
         .error { margin: 0; color: var(--error-color, #c62828); font-size: 12px; line-height: 1.4; }
     `;
 
@@ -66,12 +62,10 @@ export class HelmanOptionSegments extends LitElement {
             ${this.options.length <= MAX_SEGMENTS ? html`<div class="segments" role="group">
                 ${this.options.map((option) => html`<button type="button" data-option=${option} aria-pressed=${String(option === current)}
                     ?disabled=${disabled} @click=${() => this._select(option)}>${this.label(option)}</button>`)}
-            </div>` : html`<label class="dropdown"><span class="name">${this.name}</span>
-                <select data-dropdown .value=${live(current ?? "")} ?disabled=${disabled}
-                    @change=${(event: Event) => this._select((event.currentTarget as HTMLSelectElement).value)}>
-                    ${current !== undefined && this.options.includes(current) ? nothing : html`<option value=${current ?? ""} disabled selected>—</option>`}
-                    ${this.options.map((option) => html`<option value=${option} ?selected=${option === current}>${this.label(option)}</option>`)}
-                </select></label>`}
+            </div>` : html`<ha-select data-dropdown .label=${this.name} .disabled=${disabled}
+                .options=${this.options.map((option) => ({ value: option, label: this.label(option) }))}
+                .value=${current !== undefined && this.options.includes(current) ? current : "—"}
+                @selected=${(event: CustomEvent<{ value?: string }>) => { if (event.detail.value !== undefined) void this._select(event.detail.value); }}></ha-select>`}
             ${this._actionError ? html`<p class="error" role="alert" data-error>${this._actionError}</p>` : nothing}
         `;
     }

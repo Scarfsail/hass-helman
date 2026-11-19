@@ -1,11 +1,13 @@
 import { expect, test } from "@playwright/test";
 import { CARD_BUNDLE, loadBundle } from "./support/card-page";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
+import { HA_SELECT_STUB } from "./support/ha-select-stub";
 import { onDashboard } from "./support/node-detail-harness";
 import { flowGlow } from "../cards/shared/flow-style";
 
 test.beforeEach(async ({ page }) => {
     await page.setContent("<div id='mount' style='width:320px'></div>");
+    await page.addScriptTag({ content: HA_SELECT_STUB });
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-flow-gauge"));
 });
@@ -365,7 +367,7 @@ async function mountPicker(page: import("@playwright/test").Page, options: strin
 test("a picker of up to three options is one segmented bar on one line, its live option pressed", async ({ page }) => {
     await mountPicker(page, ["fast", "eco", "stop"], "eco");
     const picker = page.locator("helman-option-segments");
-    await expect(picker.locator("select")).toHaveCount(0);
+    await expect(picker.locator("ha-select")).toHaveCount(0);
     const buttons = picker.locator(".segments button");
     await expect(buttons).toHaveText(["FAST", "ECO", "STOP"]);
     await expect(picker.locator("[aria-pressed=true]")).toHaveText("ECO");
@@ -376,15 +378,15 @@ test("a picker of up to three options is one segmented bar on one line, its live
     ]);
 });
 
-test("a picker of more than three options is a named dropdown, its live option picked", async ({ page }) => {
+test("a picker of more than three options is Home Assistant's select, named, its live option picked", async ({ page }) => {
     await mountPicker(page, ["a", "b", "c", "d"], "c");
     const picker = page.locator("helman-option-segments");
-    await expect(picker.locator("button")).toHaveCount(0);
-    await expect(picker.locator(".dropdown .name")).toHaveText("Mode");
-    const select = picker.locator("select");
-    await expect(select.locator("option")).toHaveText(["A", "B", "C", "D"]);
-    await expect(select).toHaveValue("c");
-    await select.selectOption("d");
+    await expect(picker.locator(".segments")).toHaveCount(0);
+    const select = picker.locator("ha-select");
+    await expect(select.locator("[data-label]")).toHaveText("Mode");
+    await expect(select.locator("[data-item]")).toHaveText(["A", "B", "C", "D"]);
+    await expect(select.locator("[data-value]")).toHaveText("C");
+    await select.locator("[data-item=d]").click();
     await expect.poll(() => page.evaluate(() => (window as any).__picks)).toEqual([
         { type: "call_service", domain: "select", service: "select_option", service_data: { entity_id: "select.mode", option: "d" } },
     ]);
@@ -395,14 +397,14 @@ test("a picker is disabled while its entity is unreadable, as a bar and as a dro
     await mountPicker(page, ["a", "b", "c", "d"], "unavailable");
     const pickers = page.locator("helman-option-segments");
     for (const button of await pickers.nth(0).locator("button").all()) await expect(button).toBeDisabled();
-    await expect(pickers.nth(1).locator("select")).toBeDisabled();
+    await expect(pickers.nth(1).locator("ha-select")).toHaveJSProperty("disabled", true);
 });
 
 test("a dropdown whose live value is no option shows the placeholder, never the first option", async ({ page }) => {
     await mountPicker(page, ["a", "b", "c", "d"], "unknown_mode");
     await mountPicker(page, ["a", "b", "c", "d"], "unavailable");
-    const selects = page.locator("helman-option-segments select");
-    for (const select of await selects.all()) {
-        await expect.poll(() => select.evaluate((el: HTMLSelectElement) => el.selectedOptions[0]?.textContent)).toBe("—");
+    for (const select of await page.locator("helman-option-segments ha-select").all()) {
+        await expect(select).toHaveJSProperty("value", "—");
+        await expect(select.locator("[data-value]")).toHaveText("—");
     }
 });

@@ -235,8 +235,8 @@ test("battery's control tile is the inverter's lane: controlled through it, who 
     // Controlled through comes first, then the tile's own rows, then the mode picker.
     expect(await tile.evaluate((el) => Array.from(el.shadowRoot!.querySelectorAll("slot")).map((slot) => slot.assignedElements().map((e) => e.hasAttribute("data-controlled-through") ? "through" : e.tagName.toLowerCase())))).toEqual([["through"], ["helman-option-segments"]]);
     const picker = tile.locator("[data-mode-picker]");
-    await expect(picker.locator("select")).toHaveValue("stop_discharging");
-    await expect(picker.locator("select option:checked")).toHaveText("No discharging");
+    await expect(picker.locator("ha-select")).toHaveJSProperty("value", "stop_discharging");
+    await expect(picker.locator("ha-select [data-value]")).toHaveText("No discharging");
     await expect(tile.locator("[data-override]")).toHaveText("Override…");
 });
 

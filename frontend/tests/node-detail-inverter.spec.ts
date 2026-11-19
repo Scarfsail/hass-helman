@@ -396,14 +396,15 @@ test("inverter control tile's mode dropdown lists the configured modes, the comm
     await mount(page);
     await page.locator(".inverter-cell").click();
     const picker = content(page).locator("helman-control-tile [data-mode-picker]");
-    await expect(picker.locator("button")).toHaveCount(0);
-    await expect(picker.locator(".dropdown .name")).toHaveText("Mode");
-    const select = picker.locator("select");
-    await expect(select.locator("option")).toHaveText(["Normal", "No charging", "No discharging", "Charging", "Discharging", "No export"]);
-    await expect(select).toHaveValue("normal");
-    await expect(select).toBeEnabled();
+    await expect(picker.locator(".segments")).toHaveCount(0);
+    const select = picker.locator("ha-select");
+    await expect(select.locator("[data-label]")).toHaveText("Mode");
+    await expect(select.locator("[data-item]")).toHaveText(["Normal", "No charging", "No discharging", "Charging", "Discharging", "No export"]);
+    await expect(select).toHaveJSProperty("value", "normal");
+    await expect(select.locator("[data-value]")).toHaveText("Normal");
+    await expect(select).toHaveJSProperty("disabled", false);
 
-    await select.selectOption("stop_export");
+    await select.locator("[data-item=stop_export]").click();
     await expect.poll(() => page.evaluate(() => window.__InverterRequests.filter((r) => r.type === "call_service"))).toEqual([
         { type: "call_service", domain: "select", service: "select_option", service_data: { entity_id: "select.helman_inverter_mode", option: "stop_export" } },
     ]);
@@ -412,7 +413,7 @@ test("inverter control tile's mode dropdown lists the configured modes, the comm
 test("inverter control tile's mode dropdown is disabled while the mode control is unreadable", async ({ page }) => {
     await mount(page, { modeUnavailable: true });
     await page.locator(".inverter-cell").click();
-    await expect(content(page).locator("[data-mode-picker] select")).toBeDisabled();
+    await expect(content(page).locator("[data-mode-picker] ha-select")).toHaveJSProperty("disabled", true);
 });
 
 test("inverter Overview has no mode picker without a mode control", async ({ page }) => {
