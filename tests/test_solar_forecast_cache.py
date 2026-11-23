@@ -839,7 +839,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             effective_variant="adjusted",
             adjusted_points=adjusted_points,
             explainability=None,
-            live_day_ratio=None,
+            today_gauge=None,
         )
         coordinator._solar_bias_service = SimpleNamespace(
             build_adjustment_result=Mock(return_value=bias_result)
@@ -927,27 +927,24 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             [100.0, 100.0, 50.0, 50.0, 100.0],
         )
         self.assertEqual(snapshot["rawPoints"], raw_points)
+        gauge = snapshot["biasCorrection"]["todayGauge"]
+        self.assertEqual(gauge["at"], "2026-03-20T21:15:00+01:00")
         self.assertEqual(
-            snapshot["biasCorrection"]["liveDayRatio"],
-            {
-                "ratio": 0.5,
-                "appliedRatio": 0.5,
-                "weight": 1.0,
-                "factor": 0.5,
-                "elapsedShare": 0.5,
-            },
+            (gauge["correctedSoFarWh"], gauge["actualSoFarWh"], gauge["finalRestWh"]),
+            (200.0, 100.0, 100.0),
         )
+        self.assertAlmostEqual(gauge["trust"], 1.0)
 
-    async def test_a_snapshot_from_an_earlier_day_reports_no_live_day_ratio(
+    async def test_a_snapshot_from_an_earlier_day_reports_no_today_gauge(
         self,
     ) -> None:
         coordinator = make_coordinator()
-        live = {"ratio": 0.5, "appliedRatio": 0.5, "weight": 1.0, "factor": 0.5}
+        gauge = {"at": "2026-03-20T23:45:00+01:00", "finalRestWh": 0.0, "trust": 0.9}
         snapshot = {
             "status": "available",
             "generatedAt": "2026-03-20T23:45:00+01:00",
             "points": [],
-            "biasCorrection": {"status": "applied", "liveDayRatio": live},
+            "biasCorrection": {"status": "applied", "todayGauge": gauge},
         }
         coordinator.forecast._cached_solar_forecast = snapshot
 
@@ -958,11 +955,11 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             reference_time=datetime.fromisoformat("2026-03-21T00:10:00+01:00")
         )
 
-        self.assertEqual(same_day["biasCorrection"]["liveDayRatio"], live)
-        self.assertIsNone(next_day["biasCorrection"]["liveDayRatio"])
+        self.assertEqual(same_day["biasCorrection"]["todayGauge"], gauge)
+        self.assertIsNone(next_day["biasCorrection"]["todayGauge"])
         self.assertEqual(next_day["biasCorrection"]["status"], "applied")
-        # The cache itself keeps the ratio; only the read withholds it.
-        self.assertEqual(snapshot["biasCorrection"]["liveDayRatio"], live)
+        # The cache itself keeps the gauge; only the read withholds it.
+        self.assertEqual(snapshot["biasCorrection"]["todayGauge"], gauge)
 
 
 class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):

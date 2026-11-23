@@ -2,8 +2,7 @@ import { html } from "lit";
 import { CHART_COLORS } from "../chart-colors";
 import type { DayCoverage, InspectorPayload, SeriesKey } from "../inspector-day-model";
 import { formatIncompleteNote, formatWh } from "../inspector-format";
-import { liveDayRatioValues } from "../../shared/format";
-import { resolveLocale } from "../../shared/resolve-locale";
+import "../../shared/solar-day-gauge";
 import {
   renderFamilyRow,
   renderHouseForecastErrorMetric,
@@ -18,6 +17,10 @@ import {
  * Read off `payload.totals`, never summed from the series: the backend counts
  * the slot in progress in them, deliberately, and a sum of the drawn series
  * would not.
+ *
+ * Today, while the bias correction applies, the solar day gauge closes the
+ * grid as a tile three columns wide and two rows tall on the right; the
+ * regular tiles keep their order and fill the columns to its left.
  */
 export function renderTotals(
   ctx: PanelContext,
@@ -41,9 +44,9 @@ export function renderTotals(
       : null;
   };
   return html`
-    <div class="metrics-section">
+    <div class="metrics-section totals-section">
       <strong>${t("bias_correction.inspector.daily_totals")}</strong>
-      <div class="metric-grid">
+      <div class="metric-grid ${payload.todayGauge ? "with-gauge" : ""}">
         ${ctx.isSeriesVisible("raw")
           ? renderMetric(ctx, t("bias_correction.inspector.raw_forecast"), formatWh(t, totals.rawWh), CHART_COLORS.raw, true, "raw", incomplete("raw"))
           : ""}
@@ -60,14 +63,13 @@ export function renderTotals(
           : ""}
         ${renderFamilyRow(ctx, "grid", totals.gridForecastWh, totals.gridActualWh, incomplete)}
         ${renderFamilyRow(ctx, "battery", totals.batteryForecastWh, totals.batteryActualWh, incomplete)}
-        ${payload.liveDayRatio
-          ? renderMetric(
-            ctx,
-            t("node_detail.shared.technical.live_day_ratio"),
-            t("node_detail.shared.technical.live_day_ratio_value", liveDayRatioValues(payload.liveDayRatio, resolveLocale(ctx.hass))),
-          )
-          : ""}
         ${options.hideMoneyStrip ? "" : renderMoneyMetrics(ctx, payload, null)}
+        ${payload.todayGauge
+          ? html`<div class="metric-card today-gauge" data-today-gauge>
+            <div class="metric-label">${t("node_detail.shared.solar_day_gauge.title")}</div>
+            <helman-solar-day-gauge .gauge=${payload.todayGauge} .hass=${ctx.hass} .localize=${t}></helman-solar-day-gauge>
+          </div>`
+          : ""}
       </div>
     </div>
   `;

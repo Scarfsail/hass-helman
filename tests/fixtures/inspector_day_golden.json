@@ -189,6 +189,6 @@
     "hasProfile": true
   },
   "priceUnit": null,
-  "liveDayRatio": null,
+  "todayGauge": null,
   "batterySocBounds": []
 }

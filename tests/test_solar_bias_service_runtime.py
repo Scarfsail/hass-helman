@@ -133,9 +133,17 @@ def test_live_day_ratio_scales_the_rest_of_today_when_adjusted_and_enabled():
 
     assert result.effective_variant == "adjusted"
     assert [p["value"] for p in result.adjusted_points] == [10.0, 10.0, 5.0, 5.0]
-    assert result.live_day_ratio == models.LiveDayRatio(
-        ratio=0.5, applied_ratio=0.5, weight=1.0, factor=0.5, elapsed_share=0.5
+    gauge = result.today_gauge
+    assert gauge.at == NOW
+    assert (gauge.raw_so_far, gauge.corrected_so_far, gauge.actual_so_far) == (
+        20.0,
+        20.0,
+        10.0,
     )
+    # The rest of today is the live-scaled one; the correction caught up fully.
+    assert (gauge.raw_rest, gauge.final_rest) == (20.0, 10.0)
+    assert gauge.trust == pytest.approx(1.0)
+    assert gauge.direction is None
 
 
 def test_disabled_live_day_ratio_leaves_the_profile_only_forecast():
@@ -144,20 +152,25 @@ def test_disabled_live_day_ratio_leaves_the_profile_only_forecast():
 
     result = disabled.build_adjustment_result(_LIVE_RAW, NOW, _LIVE_ACTUAL)
 
-    assert result.live_day_ratio is None
     assert result.adjusted_points == enabled.build_adjustment_result(
         _LIVE_RAW, NOW, []
     ).adjusted_points
     assert [p["value"] for p in result.adjusted_points] == [10.0] * 4
+    # Still measured for the gauge: the whole miss is left uncorrected.
+    gauge = result.today_gauge
+    assert gauge.final_rest == 20.0
+    assert gauge.trust == pytest.approx(0.5)
+    assert gauge.direction == "lower"
+    assert (gauge.likely_low, gauge.likely_high) == pytest.approx((10.0, 10.0))
 
 
-def test_live_day_ratio_is_not_applied_to_the_raw_variant():
+def test_no_gauge_on_the_raw_variant():
     service = _make_applied_service(_make_cfg(), last_outcome="insufficient_history")
 
     result = service.build_adjustment_result(_LIVE_RAW, NOW, _LIVE_ACTUAL)
 
     assert result.effective_variant == "raw"
-    assert result.live_day_ratio is None
+    assert result.today_gauge is None
     assert result.adjusted_points == _LIVE_RAW
 
 

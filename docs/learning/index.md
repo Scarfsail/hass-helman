@@ -18,7 +18,7 @@ Learns how your forecast provider is wrong for your array, per 15-minute time of
 | Minimum valid days per slot | 5 | A time of day is corrected only with this many usable days for it |
 | Min / max forecast clamp | 0 / 3 | Bounds for a correction factor |
 | Max interpolated consecutive slots | 2 | Short gaps between corrected slots are interpolated |
-| **Live day ratio** | on | Scales the rest of today by how today is going. Fully trusted after half of the day's forecast; bounded 0.3–2 |
+| **Live day ratio** | on | Scales the rest of today by how today is going. Fully trusted after half of the day's forecast; bounded 0.3–2. Its effect and the trust in the rest of today show in the [solar day gauge](../using/node-details.md#solar-day-gauge) |
 | **Invalidate training slot data** | curtailment off | Setting *Max battery SoC %* turns curtailment detection on: a slot with the battery at or above it, export within the 50 W deadband and production below 0.8 × forecast is excluded. Meter glitches (spikes, false zeros) are excluded too |
 
 The diagnostics show the factors, how many slots were omitted or invalidated, and a day chart of raw against corrected forecast.

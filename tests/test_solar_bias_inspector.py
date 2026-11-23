@@ -110,7 +110,7 @@ def test_inspector_day_serializes_frontend_contract():
             "hasProfile": True,
         },
         "priceUnit": None,
-        "liveDayRatio": None,
+        "todayGauge": None,
         "batterySocBounds": [],
     }
 
@@ -569,19 +569,19 @@ def test_inspector_day_today_preserves_15min_granularity():
 @pytest.mark.parametrize(
     ("target_date", "expected"),
     [
-        ("2026-04-25", {"ratio": 0.6, "appliedRatio": 0.6, "weight": 0.8, "factor": 0.66, "elapsedShare": 0.4}),
+        ("2026-04-25", {"at": "2026-04-25T10:00:00+02:00", "finalRestWh": 7600.0, "trust": 0.66}),
         ("2026-04-26", None),
         ("2026-04-24", None),
     ],
 )
-def test_inspector_day_reports_the_live_day_ratio_for_today_only(target_date, expected):
-    live = {"ratio": 0.6, "appliedRatio": 0.6, "weight": 0.8, "factor": 0.66, "elapsedShare": 0.4}
+def test_inspector_day_reports_the_today_gauge_for_today_only(target_date, expected):
+    gauge = {"at": "2026-04-25T10:00:00+02:00", "finalRestWh": 7600.0, "trust": 0.66}
 
     async def provider(*, reference_time):
         return {
             "rawPoints": [],
             "correctedPoints": [],
-            "biasCorrection": {"liveDayRatio": live},
+            "biasCorrection": {"todayGauge": gauge},
         }
 
     service = _make_service(provider)
@@ -597,7 +597,7 @@ def test_inspector_day_reports_the_live_day_ratio_for_today_only(target_date, ex
     finally:
         service_mod.dt_util.now = old_now
 
-    assert payload["liveDayRatio"] == expected
+    assert payload["todayGauge"] == expected
 
 
 def test_inspector_day_impact_factor_is_none_when_raw_is_zero():

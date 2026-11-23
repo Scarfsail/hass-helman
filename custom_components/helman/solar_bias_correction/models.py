@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from ..battery_state import read_battery_entity_config
@@ -175,15 +176,42 @@ class LiveDayRatio:
     elapsed_share: float
 
 
-def live_day_ratio_to_payload(live: LiveDayRatio | None) -> dict[str, Any] | None:
-    if live is None:
+@dataclass
+class TodayGauge:
+    """Every number the solar day gauge draws for today, in Wh.
+
+    ``at`` is the current slot, where the rest of today starts. The so-far
+    sums run over the live day ratio's matched elapsed slots and, with the
+    trust, stay ``None`` until one of them carries corrected energy.
+    ``direction`` is ``"lower"``, ``"higher"`` or ``None`` (either way).
+    """
+
+    at: datetime
+    raw_rest: float
+    final_rest: float
+    raw_so_far: float | None = None
+    corrected_so_far: float | None = None
+    actual_so_far: float | None = None
+    trust: float | None = None
+    likely_low: float | None = None
+    likely_high: float | None = None
+    direction: str | None = None
+
+
+def today_gauge_to_payload(gauge: TodayGauge | None) -> dict[str, Any] | None:
+    if gauge is None:
         return None
     return {
-        "ratio": live.ratio,
-        "appliedRatio": live.applied_ratio,
-        "weight": live.weight,
-        "factor": live.factor,
-        "elapsedShare": live.elapsed_share,
+        "at": gauge.at.isoformat(),
+        "rawSoFarWh": gauge.raw_so_far,
+        "correctedSoFarWh": gauge.corrected_so_far,
+        "actualSoFarWh": gauge.actual_so_far,
+        "rawRestWh": gauge.raw_rest,
+        "finalRestWh": gauge.final_rest,
+        "trust": gauge.trust,
+        "likelyLowWh": gauge.likely_low,
+        "likelyHighWh": gauge.likely_high,
+        "direction": gauge.direction,
     }
 
 
@@ -193,7 +221,7 @@ class SolarBiasAdjustmentResult:
     effective_variant: str | None
     adjusted_points: list[dict[str, Any]]
     explainability: SolarBiasExplainability | None
-    live_day_ratio: LiveDayRatio | None = None
+    today_gauge: TodayGauge | None = None
 
 
 @dataclass
@@ -462,9 +490,9 @@ class SolarBiasInspectorDay:
     #: same meter and share a y-scale in the strip, so a payload that quoted
     #: them differently would be undrawable anyway.
     price_unit: str | None = None
-    #: Today's live day ratio as the canonical snapshot reports it; ``None``
+    #: Today's solar day gauge as the canonical snapshot reports it; ``None``
     #: on any other date.
-    live_day_ratio: dict[str, Any] | None = None
+    today_gauge: dict[str, Any] | None = None
 
 
 def navigation_range_payload(min_date: str, max_date: str) -> dict[str, str]:
@@ -560,7 +588,7 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "hasProfile": day.availability.has_profile,
         },
         "priceUnit": day.price_unit,
-        "liveDayRatio": day.live_day_ratio,
+        "todayGauge": day.today_gauge,
         "batterySocBounds": [
             {"slot": p.slot, "minPct": p.min_pct, "maxPct": p.max_pct}
             for p in day.battery_soc_bounds

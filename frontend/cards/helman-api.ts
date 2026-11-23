@@ -386,17 +386,27 @@ export interface SolarBiasCorrectionDTO {
         usableDays: number;
         droppedDays: number;
     };
-    /** How today has produced so far against the corrected forecast; null when it does not apply. */
-    liveDayRatio: LiveDayRatioDTO | null;
+    /** Every number today's solar day gauge draws; null when the correction does not apply. */
+    todayGauge: TodayGaugeDTO | null;
 }
 
-/** Today's live day ratio: the rest of today is scaled by `factor` = `appliedRatio` ^ `weight`. */
-export interface LiveDayRatioDTO {
-    ratio: number;
-    appliedRatio: number;
-    weight: number;
-    factor: number;
-    elapsedShare: number;
+/**
+ * Today's solar day gauge, in Wh. `at` is the current slot, where the rest of
+ * today starts. The so-far sums and the trust are null until the first
+ * measured slot with corrected energy.
+ */
+export interface TodayGaugeDTO {
+    at: string;
+    rawSoFarWh: number | null;
+    correctedSoFarWh: number | null;
+    actualSoFarWh: number | null;
+    rawRestWh: number;
+    finalRestWh: number;
+    /** A heuristic from today's own data, 0–1, not a measured probability. */
+    trust: number | null;
+    likelyLowWh: number | null;
+    likelyHighWh: number | null;
+    direction: "lower" | "higher" | null;
 }
 
 export function getEffectiveSolarForecastPoints(

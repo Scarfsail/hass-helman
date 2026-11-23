@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 from copy import deepcopy
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -17,6 +19,7 @@ from custom_components.helman.solar_bias_correction.adjuster import (
     adjust,
     apply_live_day_ratio,
     live_day_ratio,
+    today_gauge,
 )
 from custom_components.helman.solar_bias_correction.models import (
     BiasConfig,
@@ -311,3 +314,157 @@ def test_live_day_ratio_on_a_dst_length_day(prague):
     assert out[13]["value"] == pytest.approx(10.0 * live.factor)
     assert [p["value"] for p in out[:13]] == [10.0] * 13
     assert all(p["value"] == pytest.approx(10.0 * live.factor) for p in out[13:])
+
+
+# --- today gauge --------------------------------------------------------------
+
+
+def _swinging_day(ratio: float, swing: float) -> tuple[dict, dict]:
+    """Two elapsed hours whose ratios are ``ratio * e^(+/-swing)``.
+
+    The hours are weighted so the day's ratio is exactly ``ratio`` and the
+    energy-weighted RMS of ``ln(r_h / r)`` exactly ``swing``. One 9 kWh slot
+    at 10:00 is the rest of today.
+    """
+    up = (1 - math.exp(-swing)) / (math.exp(swing) - math.exp(-swing)) if swing else 0.5
+    corrected = {"08:00": 1000.0 * up, "09:00": 1000.0 * (1 - up), "10:00": 9000.0}
+    actual = {
+        "08:00": corrected["08:00"] * ratio * math.exp(swing),
+        "09:00": corrected["09:00"] * ratio * math.exp(-swing),
+    }
+    return corrected, actual
+
+
+def _gauge(corrected, actual, *, factor=None, final_rest=7600.0, cfg=None, now="10:00"):
+    cfg = cfg or _cfg()
+    raw = {hhmm: value * 2 for hhmm, value in corrected.items()}
+    final = {**corrected, "10:00": final_rest}
+    live = live_day_ratio(_points(corrected), _points(actual), _at(now), cfg)
+    if live is not None and factor is not None:
+        live = replace(live, factor=factor)
+    return today_gauge(
+        _points(raw), _points(corrected), _points(final), _points(actual), live, _at(now), cfg
+    )
+
+
+@pytest.mark.parametrize(
+    ("ratio", "factor", "swing", "trust", "direction"),
+    [
+        # Foggy, 10:00, the correction 56 % trusted.
+        (0.41, 0.61, 0.10, 0.66, "lower"),
+        # The same day at 14:00, fully trusted and steady.
+        (0.40, 0.40, 0.08, 0.92, None),
+        # Sun and clouds: caught up, but swinging.
+        (0.75, 0.75, 0.55, 0.58, None),
+        # Brighter than forecast.
+        (1.25, 1.15, 0.10, 0.87, "higher"),
+    ],
+)
+def test_today_gauge_reproduces_the_worked_cases(prague, ratio, factor, swing, trust, direction):
+    corrected, actual = _swinging_day(ratio, swing)
+
+    gauge = _gauge(corrected, actual, factor=factor)
+
+    gap = ratio / factor
+    assert gauge.trust == pytest.approx(trust, abs=0.01)
+    assert gauge.trust == pytest.approx(math.exp(-math.hypot(math.log(gap), swing)))
+    assert gauge.direction == direction
+    assert gauge.likely_low == pytest.approx(7600.0 * gap * math.exp(-swing))
+    assert gauge.likely_high == pytest.approx(7600.0 * gap * math.exp(swing))
+
+
+def test_today_gauge_foggy_range_matches_the_mockup(prague):
+    corrected, actual = _swinging_day(0.41, 0.10)
+
+    gauge = _gauge(corrected, actual, factor=0.61)
+
+    assert round(gauge.likely_low / 1000, 1) == 4.6
+    assert round(gauge.likely_high / 1000, 1) == 5.6
+
+
+def test_today_gauge_sums_before_and_after_now(prague):
+    corrected, actual = _swinging_day(0.5, 0.0)
+
+    gauge = _gauge(corrected, actual, factor=0.5, now="10:00")
+
+    assert gauge.at == _at("10:00")
+    assert gauge.raw_so_far == pytest.approx(2000.0)
+    assert gauge.corrected_so_far == pytest.approx(1000.0)
+    assert gauge.actual_so_far == pytest.approx(500.0)
+    # The rest starts at the current slot, the one the live ratio scales from.
+    assert gauge.raw_rest == pytest.approx(18000.0)
+    assert gauge.final_rest == pytest.approx(7600.0)
+
+
+def test_today_gauge_before_the_first_matched_slot_shows_the_rest_only(prague):
+    corrected, _ = _swinging_day(0.5, 0.0)
+
+    gauge = _gauge(corrected, {}, now="07:00")
+
+    assert gauge.raw_rest == pytest.approx(2 * sum(corrected.values()))
+    assert gauge.final_rest == pytest.approx(
+        corrected["08:00"] + corrected["09:00"] + 7600.0
+    )
+    assert gauge.raw_so_far is None
+    assert gauge.corrected_so_far is None
+    assert gauge.actual_so_far is None
+    assert gauge.trust is None
+    assert gauge.likely_low is None
+    assert gauge.likely_high is None
+    assert gauge.direction is None
+
+
+def test_today_gauge_with_the_live_ratio_disabled_leaves_the_whole_miss(prague):
+    corrected, actual = _swinging_day(0.5, 0.0)
+
+    gauge = _gauge(corrected, actual, cfg=_cfg(live_day_ratio_enabled=False))
+
+    assert gauge.trust == pytest.approx(0.5)
+    assert gauge.direction == "lower"
+    assert gauge.likely_low == pytest.approx(3800.0)
+
+
+def test_today_gauge_under_the_cap_keeps_the_gap_below_it(prague):
+    # Steady at 0.22, under the 0.3 floor the correction can apply.
+    corrected, actual = _swinging_day(0.22, 0.0)
+
+    gauge = _gauge(corrected, actual, factor=0.3)
+
+    # Both hours clamp to the floor alike: no swing, only the uncorrected gap.
+    assert gauge.trust == pytest.approx(0.22 / 0.3)
+    assert gauge.direction == "lower"
+
+
+def test_today_gauge_clamps_the_gap_of_a_noisy_dawn(prague):
+    # A first slot of 5 Wh forecast and 50 Wh produced: r = 10.
+    corrected = {"08:00": 5.0, "10:00": 9000.0}
+    actual = {"08:00": 50.0}
+
+    gauge = _gauge(corrected, actual, factor=1.0)
+
+    # g clamps to the 2.0 bound; the single hour swings by nothing.
+    assert gauge.trust == pytest.approx(0.5)
+    assert gauge.direction == "higher"
+    assert gauge.likely_low == pytest.approx(7600.0 * 2.0)
+    assert gauge.likely_high == pytest.approx(7600.0 * 2.0)
+
+
+def test_today_gauge_clamps_an_hour_of_zero_production(prague):
+    corrected = {"08:00": 500.0, "09:00": 500.0, "10:00": 9000.0}
+    actual = {"08:00": 0.0, "09:00": 500.0}
+
+    gauge = _gauge(corrected, actual, factor=0.5)
+
+    # r = 0.5; the hours swing to 0.3 (clamped from 0) and 1.0.
+    swing = math.sqrt((math.log(0.3 / 0.5) ** 2 + math.log(1.0 / 0.5) ** 2) / 2)
+    assert gauge.trust == pytest.approx(math.exp(-swing))
+    assert gauge.direction is None
+
+
+def test_today_gauge_skips_an_hour_with_no_corrected_energy(prague):
+    corrected = {"07:00": 0.0, "08:00": 500.0, "09:00": 500.0, "10:00": 9000.0}
+    actual = {"07:00": 0.0, "08:00": 250.0, "09:00": 250.0}
+
+    gauge = _gauge(corrected, actual, factor=0.5)
+
+    assert gauge.trust == pytest.approx(1.0)

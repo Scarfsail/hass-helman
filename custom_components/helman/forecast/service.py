@@ -241,11 +241,11 @@ def _battery_forecast_slot_values(entry: dict[str, Any]) -> dict[str, float] | N
     return values or None
 
 
-def _without_stale_live_day_ratio(
+def _without_stale_today_gauge(
     snapshot: dict[str, Any], reference_time: datetime
 ) -> dict[str, Any]:
     bias = snapshot.get("biasCorrection")
-    if not isinstance(bias, dict) or bias.get("liveDayRatio") is None:
+    if not isinstance(bias, dict) or bias.get("todayGauge") is None:
         return snapshot
     generated_at = dt_util.parse_datetime(snapshot.get("generatedAt") or "")
     if (
@@ -254,7 +254,7 @@ def _without_stale_live_day_ratio(
         == dt_util.as_local(reference_time).date()
     ):
         return snapshot
-    return {**snapshot, "biasCorrection": {**bias, "liveDayRatio": None}}
+    return {**snapshot, "biasCorrection": {**bias, "todayGauge": None}}
 
 
 def _build_forecast_staleness(
@@ -1029,13 +1029,13 @@ class ForecastService:
 
         A pure cache read: rebuilding here would put a 56-day recorder scan on
         the path of every card open. The snapshot's age reaches the card in the
-        payload's ``staleness`` block instead. Only the live day ratio is
+        payload's ``staleness`` block instead. Only today's solar gauge is
         withheld from a snapshot built on an earlier local day: it describes
         the day it was measured on, and must not be read as today's.
         """
         cached_solar_forecast = self._cached_solar_forecast
         if isinstance(cached_solar_forecast, dict):
-            return _without_stale_live_day_ratio(
+            return _without_stale_today_gauge(
                 cached_solar_forecast, reference_time
             )
         return None

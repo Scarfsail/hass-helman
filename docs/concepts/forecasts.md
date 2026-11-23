@@ -10,7 +10,7 @@ Solar forecast services are wrong in ways that repeat. A tree shades the array a
 
 **What it ignores.** A slot is no evidence when the battery was full and nothing was exported: the inverter was throttling the array, so production reads low even though the forecast was right. Once you turn curtailment detection on, such *curtailed* slots are thrown out before training, together with meter glitches. Night slots and slots with too few usable days are not corrected at all.
 
-**Today, live.** The nightly correction treats every day alike. The **live day ratio** adds today's own evidence: as the sun comes up, Helman compares today's production with the corrected forecast for the same slots and scales the rest of today by that ratio. A day running at half its forecast plans its afternoon at about half. The ratio is trusted more as the day goes on, fully once half of today's forecast energy should have arrived, and it stays between 0.3 and 2.
+**Today, live.** The nightly correction treats every day alike. The **live day ratio** adds today's own evidence: as the sun comes up, Helman compares today's production with the corrected forecast for the same slots and scales the rest of today by that ratio. A day running at half its forecast plans its afternoon at about half. The ratio is trusted more as the day goes on, fully once half of today's forecast energy should have arrived, and it stays between 0.3 and 2. The [solar day gauge](../using/node-details.md#solar-day-gauge) shows what it changed and how far to trust the rest of today.
 
 <div class="shots" markdown>
 ![Solar forecast in the solar detail](../assets/images/detail-solar-forecast.png){ .shot }
