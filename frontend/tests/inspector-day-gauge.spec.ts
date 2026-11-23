@@ -114,9 +114,23 @@ test("the end step only shows the raw rest against Helman's rest, not the day so
     const finalRest = (await gauge.locator(".bar .fill.rest").boundingBox())!;
     // Raw rest = final rest: the end step is straight, though raw so far and produced differ.
     expect(Math.abs(rawRest.x + rawRest.width - (finalRest.x + finalRest.width))).toBeLessThan(0.5);
+    // Produced (0.3) is below the so-far sums: both rests still start at the now boundary.
+    expect(Math.abs(rawRest.x - finalRest.x)).toBeLessThan(0.5);
     const xs = await gauge.locator(".step-end").evaluate((el) =>
         el.getAttribute("points")!.trim().split(/\s+/).map((point) => Number(point.split(",")[0])));
     expect(Math.max(...xs) - Math.min(...xs)).toBeLessThan(0.01);
+});
+
+test("after sunset a production shortfall leaves the hatched rest empty, starting at now", async ({ page }) => {
+    await mountInspector(page, { ...FOGGY, rawSoFarWh: 10000, correctedSoFarWh: 10000, actualSoFarWh: 5000,
+        rawRestWh: 0, finalRestWh: 0, likelyLowWh: 0, likelyHighWh: 0 });
+    const gauge = tile(page).locator("helman-solar-day-gauge");
+    const bar = (await gauge.locator(".bar").boundingBox())!;
+    const rest = (await gauge.locator(".bar .fill.rest").boundingBox())!;
+    const soFar = (await gauge.locator(".lane .fill.so-far").boundingBox())!;
+    expect(rest.width).toBeLessThan(0.5);
+    expect(Math.abs(rest.x - (soFar.x + soFar.width))).toBeLessThan(0.5);
+    expect(rest.x).toBeGreaterThan(bar.x + bar.width * 0.5);
 });
 
 test("a tiny rest late in the day keeps its label clear of the day so far", async ({ page }) => {

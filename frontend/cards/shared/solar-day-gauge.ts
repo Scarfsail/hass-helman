@@ -139,13 +139,13 @@ export class HelmanSolarDayGauge extends LitElement {
                 <div class="track">
                     <div class="lane">
                         <span class="fill so-far" style=${span(0, rawSoFar)}></span>
-                        <span class="fill rest" style=${at(x(rawSoFar), rawEndX)}></span>
+                        <span class="fill rest" style=${at(xa(0), rawEndX)}></span>
                     </div>
                     <div class="bar">
                         <span class="fill produced" style=${span(0, Math.min(actual, corrected))}></span>
                         ${actual > corrected ? html`<span class="fill over" data-over style=${span(corrected, actual)}></span>` : nothing}
                         ${actual < corrected ? html`<span class="short" data-short style=${span(actual, corrected)}></span>` : nothing}
-                        <span class="fill rest" style=${at(x(actual), finalEndX)}></span>
+                        <span class="fill rest" style=${at(xa(0), finalEndX)}></span>
                         ${measured ? html`<span class="range ${dir}" data-range style=${at(xa(g.likelyLowWh!), xa(g.likelyHighWh!))}></span>` : nothing}
                         <span class="final" data-label="final-rest" style="left: ${split * 100}%; right: ${100 - finalEndX}%">${kwh(g.finalRestWh)}</span>
                     </div>
