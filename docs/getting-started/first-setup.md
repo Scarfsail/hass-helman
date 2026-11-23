@@ -35,7 +35,7 @@ Each node needs its power sensor. Set the **sign convention** to match the senso
 
 - **Solar**: the power and today's energy sensors, the array's **max power**, and the **daily energy entities** of your solar forecast: entity 1 is today, entity 2 tomorrow, and so on up to 8 days. Helman reads their hourly or 15-minute breakdown (`wh_period`, `wh_period_15m` or `watts` attributes).
 - **Battery**: SoC, remaining energy, min and max SoC, the charge and discharge efficiencies and the maximum charge and discharge power. The battery planning is only as good as these numbers.
-- **Grid**: the signed power sensor, today's import and export, the **max allowed export power** from your grid contract, the **sell price entity** and your **import price windows**. The windows must cover the whole day without gaps. The day's lowest price is the *cheap* band and every window priced above it is *expensive*. The [battery reserve](../automation/battery-reserve.md) is planned around these bands.
+- **Grid**: the signed power sensor, today's import and export, the **max allowed export power** from your grid contract, the **sell price entity** and your **import price windows**. The windows must cover the whole day without gaps, and every price must be a finite number. The tariff's lowest price is the *cheap* band and every window priced above it is *expensive*. After the day's last cheap window has passed, the remaining expensive hours stay expensive. The [battery reserve](../automation/battery-reserve.md) is planned around these bands.
 - **House**: the power sensor and, under **Forecast**, a **cumulative house energy** sensor. The consumption forecast trains on it.
 
 !!! info "Export price entity format"

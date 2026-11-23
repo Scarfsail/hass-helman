@@ -210,6 +210,9 @@ class DayContextResolver:
             or [],
             import_price_points=snapshot.context.import_price_forecast.get("points")
             or [],
+            import_price_cheap_level=snapshot.context.import_price_forecast.get(
+                "dailyMinPrice"
+            ),
             battery_max_soc=(
                 None if battery_state is None else battery_state.max_soc
             ),

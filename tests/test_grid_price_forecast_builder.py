@@ -108,6 +108,27 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
             snapshot["import"]["points"][36],
             {"timestamp": "2026-03-21T06:00:00+01:00", "value": 7.0},
         )
+        # The tariff's own minimum is the cheap reference for import bands.
+        self.assertEqual(snapshot["import"]["dailyMinPrice"], 5.0)
+        # It is internal: the public response picks its fields explicitly.
+        response_module = importlib.import_module(
+            "custom_components.helman.grid_price_forecast_response"
+        )
+        self.assertEqual(
+            set(
+                response_module.build_grid_price_forecast_response(
+                    snapshot, forecast_days=1
+                )
+            ),
+            {
+                "exportPriceUnit",
+                "currentExportPrice",
+                "exportPricePoints",
+                "importPriceUnit",
+                "currentImportPrice",
+                "importPricePoints",
+            },
+        )
 
     def test_export_ingestion_rejects_a_non_finite_current_price(self) -> None:
         # The same filter the schedule values get. A `nan` reaching the mirror's
@@ -296,6 +317,36 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
         self.assertEqual(snapshot["import"]["unit"], None)
         self.assertEqual(snapshot["import"]["currentPrice"], None)
         self.assertEqual(snapshot["import"]["points"], [])
+        self.assertNotIn("dailyMinPrice", snapshot["import"])
+
+    def test_build_rejects_non_finite_import_window_price(self) -> None:
+        for price in ("nan", "inf", float("nan"), float("-inf")):
+            with self.subTest(price=price):
+                module, builder = self._make_builder(
+                    config={
+                        "energy_nodes": {
+                            "grid": {
+                                "forecast": {
+                                    "import_price_unit": "CZK/kWh",
+                                    "import_price_windows": [
+                                        {"start": "22:00", "end": "06:00", "price": price},
+                                        {"start": "06:00", "end": "22:00", "price": 7},
+                                    ],
+                                }
+                            }
+                        }
+                    }
+                )
+
+                with patch.object(module, "dt_util", dt_util):
+                    snapshot = builder.build(
+                        reference_time=REFERENCE_TIME,
+                        export_snapshot=builder.build_export_price_snapshot(),
+                    )
+
+                self.assertEqual(snapshot["import"]["status"], "invalid_config")
+                self.assertEqual(snapshot["import"]["points"], [])
+                self.assertNotIn("dailyMinPrice", snapshot["import"])
 
     def test_build_rejects_overlap_in_import_windows(self) -> None:
         module, builder = self._make_builder(

@@ -18,6 +18,12 @@ so the elapsed part is added from the actual histories the input bundle already
 carries. Without that, every day decays toward deficit through the afternoon on
 a forecast that has not moved at all.
 
+Import bands mark a slot cheap only when its price equals the import tariff's
+own lowest price (``import_price_cheap_level``), not the lowest price left in
+the day's points: the forecast starts at ``now``, so after today's last cheap
+window has passed the remaining expensive slots would otherwise become their
+own minimum and turn cheap.
+
 The builder here is pure: it consumes already-parsed forecast series/points and
 returns a ``dict[date, DayContext]``. The pipeline adapts each snapshot into
 these inputs; the coordinator owns the hysteresis store.
@@ -94,6 +100,7 @@ def build_day_contexts(
     house_actual_history: list[dict[str, Any]] | None = None,
     previous_bands: Mapping[date, str] | None = None,
     denominator_optimizer_id: str | None = None,
+    import_price_cheap_level: float | None,
 ) -> dict[date, DayContext]:
     """Build one ``DayContext`` per calendar day with both forecast and prices.
 
@@ -109,6 +116,10 @@ def build_day_contexts(
 
     ``previous_bands`` is the band each day held on the previous run *for this
     same denominator*; it feeds the deadband in ``_classify``.
+
+    ``import_price_cheap_level`` is the import tariff's lowest price; a slot at
+    that price is cheap, every other slot expensive. ``None`` (no import price
+    configured) yields no import bands.
     """
     previous_bands = previous_bands or {}
 
@@ -139,7 +150,8 @@ def build_day_contexts(
         export_price_max = max(export_values)
 
         import_bands = _build_import_bands(
-            import_points_by_date.get(local_date, [])
+            import_points_by_date.get(local_date, []),
+            cheap_level_value=import_price_cheap_level,
         )
 
         ratio = _solar_to_consumption_ratio(
@@ -233,12 +245,13 @@ def _classify(
 
 def _build_import_bands(
     day_import_points: list[tuple[datetime, float]],
+    *,
+    cheap_level_value: float | None,
 ) -> tuple[ImportBand, ...]:
-    if not day_import_points:
+    if not day_import_points or cheap_level_value is None:
         return ()
 
     granularity = _infer_granularity(day_import_points)
-    cheap_level_value = min(value for _, value in day_import_points)
 
     bands: list[ImportBand] = []
     current_level: str | None = None

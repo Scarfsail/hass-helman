@@ -110,6 +110,7 @@ def _make_grid_price_response() -> dict[str, object]:
             "unit": "CZK/kWh",
             "currentPrice": 7.0,
             "points": [{"timestamp": CURRENT_SLOT_ID, "value": 7.0}],
+            "dailyMinPrice": 7.0,
         },
     }
 
@@ -192,6 +193,7 @@ def _make_snapshot(
                 "unit": "CZK/kWh",
                 "currentPrice": 7.0,
                 "points": [],
+                "dailyMinPrice": 7.0,
             },
             export_price_forecast={
                 "unit": "CZK/kWh",

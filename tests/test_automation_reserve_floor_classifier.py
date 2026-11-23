@@ -498,6 +498,7 @@ def _make_build_snapshot(
                     "unit": "CZK/kWh",
                     "currentPrice": 3.0,
                     "points": _step_series(_PRICE_BY_HOUR),
+                    "dailyMinPrice": min(_PRICE_BY_HOUR.values()),
                 },
                 export_price_forecast={"unit": "CZK/kWh", "currentPrice": 2.0, "points": []},
                 appliance_registry=AppliancesRuntimeRegistry(),

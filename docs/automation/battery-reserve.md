@@ -11,11 +11,11 @@ Two problems with one cause, a battery that empties at the wrong time:
 - **Outage.** If the grid fails at 21:00 and the battery is at its 10 % minimum, the house is dark. You want, say, 20 % always held back.
 - **Expensive hours.** With a two-rate tariff, every kWh imported in the expensive band costs more than the same kWh bought the night before. On a short winter day the battery runs out in the afternoon, and the evening runs on expensive grid power.
 
-Battery reserve watches the projected battery through each expensive window. When it would drop below the reserve, it charges the missing energy from the grid in the **cheap band right before**, on the latest cheap slots, at the lowest target that suffices.
+Battery reserve watches the projected battery through each expensive window. When it would drop below the reserve, it charges the missing energy from the grid in the **cheap band right before**, on the latest cheap slots, at the lowest target that suffices. An expensive window with no cheap band before it (for example after the day's last cheap window has passed) gets no bridge charge, only the reserve floor hold.
 
 ## How
 
-The import price windows define the bands: the day's lowest price is *cheap*, everything above it is *expensive*. For each expensive window:
+The import price windows define the bands: the tariff's lowest price is *cheap*, everything above it is *expensive*. After the day's last cheap window has passed, the remaining expensive hours stay expensive. For each expensive window:
 
 1. **Project.** Simulate the battery through the window, including the planned appliances.
 2. **Measure the dip.** Find how far the lowest point falls below the required minimum: the reserve plus the expensive-window buffer.
