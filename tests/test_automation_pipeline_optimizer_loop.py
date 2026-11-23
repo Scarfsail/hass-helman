@@ -89,7 +89,11 @@ def _day_context_snapshot(*, house_kwh_per_slot: float) -> OptimizationSnapshot:
                 base.context.inputs,
                 grid_price_forecast={
                     "export": {**base.context.export_price_forecast, "points": points},
-                    "import": {**base.context.import_price_forecast, "points": points},
+                    "import": {
+                        **base.context.import_price_forecast,
+                        "points": points,
+                        "dailyMinPrice": 2.0,
+                    },
                 },
             ),
         ),

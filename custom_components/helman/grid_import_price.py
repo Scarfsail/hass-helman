@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import time
 from typing import Any
@@ -132,6 +133,10 @@ def _read_grid_import_price_window(
     if price is None:
         raise GridImportPriceConfigError(
             f"energy_nodes.grid.forecast.import_price_windows[{index}].price must be numeric"
+        )
+    if not math.isfinite(price):
+        raise GridImportPriceConfigError(
+            f"energy_nodes.grid.forecast.import_price_windows[{index}].price must be a finite number"
         )
 
     return FixedGridImportPriceWindow(

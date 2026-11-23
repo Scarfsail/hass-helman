@@ -132,15 +132,20 @@ class GridPriceForecastBuilder:
             minute_of_day=local_reference.hour * 60 + local_reference.minute,
         )
 
-        return self._make_price_snapshot(
-            status="available",
-            unit=import_config.unit,
-            current_price=current_price,
-            points=self._build_import_price_points(
-                reference_time=reference_time,
-                windows=import_config.windows,
+        return {
+            **self._make_price_snapshot(
+                status="available",
+                unit=import_config.unit,
+                current_price=current_price,
+                points=self._build_import_price_points(
+                    reference_time=reference_time,
+                    windows=import_config.windows,
+                ),
             ),
-        )
+            # Internal: the cheap reference for import bands. The points start
+            # at now, so after today's last cheap window they no longer hold it.
+            "dailyMinPrice": min(window.price for window in import_config.windows),
+        }
 
     def _build_import_price_points(
         self,
