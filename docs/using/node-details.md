@@ -16,7 +16,7 @@ Tap any icon on the flow card, or any device in the inspector or a report, and i
 
 | Node | Headline | Worth knowing |
 | --- | --- | --- |
-| **Solar** | Production now | Forecast section: the corrected forecast against production so far, and the live day ratio |
+| **Solar** | Production now | Forecast section: the production chart, the [solar day gauge](#solar-day-gauge) for today, the day's total, peak and end of production, and the next days |
 | **Battery** | State of charge | Time to full or empty *at the recent rate*. The plan-based estimate is in Forecast. The battery is controlled through the inverter: its control tile is the inverter's, with the inverter's mode picker and a link to the inverter |
 | **Grid** | Import or export now | Per-phase bars when phase sensors exist; prices and planned import/export in Forecast |
 | **House** | Consumption now | The largest subdevices as bars; the forecast with planned appliance runs drawn on it |
@@ -28,6 +28,23 @@ Tap any icon on the flow card, or any device in the inspector or a report, and i
 ![Device with schedule](../assets/images/detail-device-schedule.png){ .shot }
 ![Inverter](../assets/images/detail-inverter.png){ .shot }
 </div>
+
+## Solar day gauge
+
+While the solar forecast correction applies (at least 10 usable training days), the solar detail's Forecast section shows a **Today's forecast** gauge between the production chart and the summary rows. The [inspector](inspector.md) shows the same gauge, with the same numbers, in today's daily totals. It answers three questions: how far today's corrected forecast has been from reality so far, how much Helman changed the rest of today, and how far to trust what is left.
+
+- **Grey lane, on top:** the raw forecast from your provider, darker before now and lighter after. Its two values are the raw forecast so far and the raw rest of today.
+- **Bar, before now:** what the panels produced so far, in yellow. An orange underline marks a shortfall against the corrected forecast so far, a green fill an overshoot. Below it, *2.0 of 4.9 forecast so far −59 %* reads: 2.0 kWh produced against the 4.9 kWh Helman's corrected forecast expected for the same slots, not the day's total.
+- **Bar, after now:** Helman's forecast for the rest of today, hatched, with its value at the end. The box is the likely range, orange when the rest is likely lower, green when likely higher. Below it, *4.6–5.6 −33 %* is that range and how far its middle is from Helman's rest.
+- **Steps:** the step at now links the raw forecast so far to the corrected one. The yellow step at the end links the raw rest of today to Helman's rest, so you see how much the correction moved it.
+- **Chip:** *Remaining 4.6–5.6 kWh · trust 66 %* and a direction icon: the likely rest of today, the trust, and which way the rest is likely to go against Helman's forecast. An orange ↓ means likely lower, a green ↑ likely higher, the same tones as the range box. A blue ? means no clear direction (within 5 % either way): the rest could land anywhere in the range. Hover or tap the icon for a sentence on what it means for the rest of today, with the range values.
+
+Before now and after now each take at least a quarter of the width and are to scale within their own part, so the rest of today stays readable late in the day and the day so far early in the morning. Hover or tap the gauge for the slot it was computed for and the values on both steps. Every percentage is against the corrected forecast, never the raw one. Before the first measured slot of the day (night, dawn) only the rest of today shows, and the chip reads *trust after first slot*, with no direction icon.
+
+**Trust** is a heuristic from today's data only, not a probability learned from past days. It is 100 % only when Helman's live correction has fully caught up with how the day is going and the day has been steady. It drops for two reasons:
+
+- **The gap Helman has not corrected yet.** The [live day ratio](../concepts/forecasts.md#solar-your-providers-forecast-corrected-for-your-roof) is trusted only partly in the morning and is bounded to 0.3–2, so part of today's miss may still be in the forecast. When that gap is over 5 %, the chip's direction icon shows which way the rest is likely to go: ↓ lower or ↑ higher.
+- **Swings.** How much each elapsed hour's production ratio wandered around the day's, weighted by that hour's expected energy. A steady day scores near zero; a day of sun and cloud scores high and widens the likely range.
 
 ## Switching by hand
 

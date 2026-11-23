@@ -183,11 +183,34 @@ export const panelStyles = css`
     gap: 6px;
   }
 
+  .metrics-section.totals-section {
+    container: totals / inline-size;
+  }
+
   .metric-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
     gap: 6px;
     min-width: 0;
+  }
+
+  /* Today's solar day gauge: full width below the tiles while the grid has
+     fewer than seven columns, then three columns by two rows on the right,
+     the regular tiles filling the four columns to its left in their order. */
+  .metric-card.today-gauge {
+    grid-column: 1 / -1;
+  }
+
+  @container totals (min-width: 862px) {
+    .metric-grid.with-gauge {
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      grid-auto-flow: dense;
+    }
+
+    .metric-card.today-gauge {
+      grid-column: -4 / -1;
+      grid-row: 1 / span 2;
+    }
   }
 
   .metric-card {

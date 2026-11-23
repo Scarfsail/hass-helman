@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .models import SolarBiasAdjustmentResult, live_day_ratio_to_payload
+from .models import SolarBiasAdjustmentResult, today_gauge_to_payload
 
 
 def build_bias_correction_payload(
@@ -41,6 +41,6 @@ def build_bias_correction_payload(
         "status": adjustment_result.status,
         "effectiveVariant": adjustment_result.effective_variant,
         "explainability": explainability_payload,
-        "liveDayRatio": live_day_ratio_to_payload(adjustment_result.live_day_ratio),
+        "todayGauge": today_gauge_to_payload(adjustment_result.today_gauge),
     }
 

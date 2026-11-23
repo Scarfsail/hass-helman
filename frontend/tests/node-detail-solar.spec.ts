@@ -1,6 +1,6 @@
 import { prepareNodeDetailPage, mountSimpleCard, liveFigures, onDashboard, expectShowMore } from "./support/node-detail-harness";
 import { cardTree, forecastPayload, scheduleSlots } from "./support/payload-builders";
-import type { ForecastPayload, ForecastStatus, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
+import type { ForecastPayload, ForecastStatus, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO, TodayGaugeDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import { formatKwh } from "../cards/shared/format";
 
@@ -70,8 +70,20 @@ type Variant = {
     battery?: string;
     /** The viewer is an admin. */
     admin?: boolean;
-    /** Today is running at x0.6 of the corrected forecast, 80 % trusted. */
-    liveDayRatio?: boolean;
+    /** Today's solar day gauge: a foggy morning, or before the first measured slot. */
+    todayGauge?: "foggy" | "beforeSunrise";
+};
+
+/** The gauges the backend sends; see `inspector-day-gauge.spec.ts` for the same foggy day in the inspector. */
+const GAUGES: Record<"foggy" | "beforeSunrise", TodayGaugeDTO> = {
+    foggy: {
+        at: "2026-10-21T12:00:00+00:00", rawSoFarWh: 5400, correctedSoFarWh: 4900, actualSoFarWh: 2000,
+        rawRestWh: 14000, finalRestWh: 7600, trust: 0.664, likelyLowWh: 4600, likelyHighWh: 5640, direction: "lower",
+    },
+    beforeSunrise: {
+        at: "2026-10-21T12:00:00+00:00", rawSoFarWh: null, correctedSoFarWh: null, actualSoFarWh: null,
+        rawRestWh: 16200, finalRestWh: 13100, trust: null, likelyLowWh: null, likelyHighWh: null, direction: null,
+    },
 };
 
 /** Raw forecast Wh for the slot starting at `ms`. */
@@ -108,7 +120,7 @@ declare global {
 
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await prepareNodeDetailPage(page);
-    await page.evaluate(({ v, points, tree, forecastDefaults, scheduleDefaults }) => {
+    await page.evaluate(({ v, points, tree, forecastDefaults, scheduleDefaults, gauges }) => {
         const profile = v.profile !== false;
         const s = window.__nodeDetailState;
         const night = !!v.night;
@@ -257,7 +269,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 biasCorrection: {
                     status: "applied", effectiveVariant: "adjusted",
                     explainability: { fallbackReason: null, trainedAt: "2026-10-21T03:00:00+00:00", usableDays: 21, droppedDays: 2 },
-                    liveDayRatio: v.liveDayRatio ? { ratio: 0.6, appliedRatio: 0.6, weight: 0.8, factor: 0.6 ** 0.8, elapsedShare: 0.4 } : null,
+                    todayGauge: v.todayGauge ? gauges[v.todayGauge] : null,
                 },
             },
         };
@@ -267,7 +279,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             hass: v.admin ? { user: { is_admin: true } } : {},
         });
         window.__SolarRequests = window.__NodeDetailRequests;
-    }, { v: variant, points: forecastPoints(!!variant.night), tree: cardTree(), forecastDefaults: forecastPayload(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
+    }, { v: variant, points: forecastPoints(!!variant.night), tree: cardTree(), forecastDefaults: forecastPayload(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }), gauges: GAUGES });
     await mountSimpleCard(page);
 }
 
@@ -337,7 +349,9 @@ test("solar Forecast header says what is still to come today and tomorrow, and t
     await expect(section.locator("[data-row=total] .value")).toHaveText(`≈ ${formatKwh(18.4 + rest)} kWh (18 so far + ${formatKwh(rest)} to come)`);
     await expect(section.locator("[data-row=peak] .value")).toHaveText("5.9 kW at 12:00");
     await expect(section.locator("[data-row=ends] .value")).toHaveText("≈ 18:00");
-    await expect(section.locator("[data-row=versus] .value")).toHaveText("8 % below");
+    await expect(section.locator("[data-row=versus]")).toHaveCount(0);
+    // Without a gauge in the payload (the correction not applied), there is no gauge block.
+    await expect(section.locator("[data-today-gauge]")).toHaveCount(0);
     await expect(section.locator("[data-days] [data-day]")).toHaveCount(5);
     await expect(section.locator("[data-days] [data-day]").first()).toContainText(`${formatKwh(tomorrow)} kWh`);
     const chart = section.locator("helman-day-line-chart");
@@ -471,10 +485,10 @@ test("solar Technical details compares the raw and corrected forecast for an adm
     await openSolar(page);
     const section = content(page).locator("helman-detail-section[data-technical]");
     await section.locator("button").first().click();
-    await expect(section.locator("[data-row=correction] .value")).toHaveText("× 0.90");
+    await expect(section.locator("[data-row=correction]")).toHaveCount(0);
+    await expect(section.locator("[data-row=live-day-ratio]")).toHaveCount(0);
     await expect(section.locator("[data-row=bias-status] .value")).toHaveText("applied");
     await expect(section.locator("[data-row=bias-days] .value")).toHaveText("21");
-    await expect(section.locator("[data-row=live-day-ratio] .value")).toHaveText("—");
     await expect(section.locator("[data-row=raw] .value")).toContainText("kWh");
     await expect(section.locator("[data-row=corrected] .value")).toContainText("kWh");
     await expect(section.locator("[data-entities]")).toHaveCount(1);
@@ -482,16 +496,44 @@ test("solar Technical details compares the raw and corrected forecast for an adm
     await expect(section.locator('[data-entities] [data-entity="sensor.solar_today"]')).toHaveCount(1);
 });
 
-test("solar Technical details shows today's live day ratio with its trust", async ({ page }) => {
-    await mount(page, { admin: true, liveDayRatio: true });
+async function openForecast(page: Page, variant: Variant) {
+    await mount(page, variant);
     await openSolar(page);
-    const section = content(page).locator("helman-detail-section[data-technical]");
+    const section = content(page).locator("helman-detail-section[data-forecast]");
     await section.locator("button").first().click();
-    const row = section.locator("[data-row=live-day-ratio]");
-    await expect(row.locator(".label")).toContainText("Today's live ratio");
-    await expect(row.locator(".value")).toHaveText("× 0.66 · 80 % trusted");
-    expect(await row.locator("helman-help-tip").evaluate((el: any) => el.explanation))
-        .toBe("Rest of today scaled by how today has produced so far against the forecast");
+    return section;
+}
+
+test("solar Forecast shows today's gauge between the chart and the summary rows", async ({ page }) => {
+    const section = await openForecast(page, { todayGauge: "foggy" });
+    const block = section.locator("[data-today-gauge]");
+    await expect(block).toHaveCount(1);
+    expect(await section.evaluate((el) => {
+        const order = [...el.querySelectorAll("helman-day-line-chart, [data-today-gauge], [data-row=total]")];
+        return order.map((node) => node.matches("[data-today-gauge]") ? "gauge" : node.matches("[data-row]") ? "rows" : "chart");
+    })).toEqual(["chart", "gauge", "rows"]);
+    const gauge = block.locator("helman-solar-day-gauge");
+    await expect(gauge.locator("[data-chip]")).toHaveText(/^Remaining 4\.6–5\.6 kWh · trust 66 %↓/);
+    await expect(gauge.locator("[data-chip] [data-direction=lower]")).toHaveCount(1);
+    await expect(gauge.locator("[data-label=so-far]")).toHaveText(/^2\.0\s+of 4\.9 forecast so far\s+−59 %$/);
+    await expect(gauge.locator("[data-label=final-rest]")).toHaveText("7.6");
+    await expect(gauge.locator("[data-label=range]")).toHaveText(/^4\.6–5\.6\s+−33 %$/);
+    expect(await gauge.locator("helman-help-tip[data-legend]").evaluate((el: any) => el.explanation)).toContain("against the corrected forecast");
+});
+
+test("solar Forecast gauge before the first measured slot shows the rest of today only", async ({ page }) => {
+    const section = await openForecast(page, { todayGauge: "beforeSunrise" });
+    const gauge = section.locator("[data-today-gauge] helman-solar-day-gauge");
+    await expect(gauge.locator("[data-chip]")).toHaveText("Remaining 13.1 kWh · trust after first slot");
+    await expect(gauge.locator("[data-direction]")).toHaveCount(0);
+    await expect(gauge.locator("[data-label=raw-rest]")).toHaveText("16.2");
+    await expect(gauge.locator("[data-label=final-rest]")).toHaveText("13.1");
+    await expect(gauge.locator("[data-label=so-far]")).toHaveCount(0);
+    await expect(gauge.locator("[data-label=raw-so-far]")).toHaveCount(0);
+    await expect(gauge.locator("[data-range]")).toHaveCount(0);
+    // No step at now without a measured slot, not even a stray line at the left edge.
+    await expect(gauge.locator(".step-now")).toHaveCount(0);
+    await expect(gauge.locator(".step-end")).toHaveCount(1);
 });
 
 test("solar Technical details is not rendered for a non-admin", async ({ page }) => {

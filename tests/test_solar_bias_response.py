@@ -71,11 +71,11 @@ class SolarBiasResponseTests(unittest.TestCase):
                         "median": 1.0,
                     },
                 },
-                "liveDayRatio": None,
+                "todayGauge": None,
             },
         )
 
-    def test_payload_reports_todays_live_day_ratio(self) -> None:
+    def test_payload_reports_todays_gauge(self) -> None:
         response_module = self._import_response_module()
         models = self._import_models_module()
         adjustment_result = models.SolarBiasAdjustmentResult(
@@ -83,25 +83,35 @@ class SolarBiasResponseTests(unittest.TestCase):
             effective_variant="adjusted",
             adjusted_points=[],
             explainability=None,
-            live_day_ratio=models.LiveDayRatio(
-                ratio=0.25,
-                applied_ratio=0.3,
-                weight=0.8,
-                factor=0.3**0.8,
-                elapsed_share=0.4,
+            today_gauge=models.TodayGauge(
+                at=datetime.fromisoformat("2026-03-20T10:00:00+01:00"),
+                raw_rest=14000.0,
+                final_rest=7600.0,
+                raw_so_far=5400.0,
+                corrected_so_far=4900.0,
+                actual_so_far=2000.0,
+                trust=0.66,
+                likely_low=4600.0,
+                likely_high=5600.0,
+                direction="lower",
             ),
         )
 
         payload = response_module.build_bias_correction_payload(adjustment_result)
 
         self.assertEqual(
-            payload["liveDayRatio"],
+            payload["todayGauge"],
             {
-                "ratio": 0.25,
-                "appliedRatio": 0.3,
-                "weight": 0.8,
-                "factor": 0.3**0.8,
-                "elapsedShare": 0.4,
+                "at": "2026-03-20T10:00:00+01:00",
+                "rawSoFarWh": 5400.0,
+                "correctedSoFarWh": 4900.0,
+                "actualSoFarWh": 2000.0,
+                "rawRestWh": 14000.0,
+                "finalRestWh": 7600.0,
+                "trust": 0.66,
+                "likelyLowWh": 4600.0,
+                "likelyHighWh": 5600.0,
+                "direction": "lower",
             },
         )
 

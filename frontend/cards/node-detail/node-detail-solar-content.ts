@@ -1,4 +1,4 @@
-import { formatKwh, formatPower, liveDayRatioValues } from "../shared/format";
+import { formatKwh, formatPower } from "../shared/format";
 import { SLOT_MS } from "../shared/time/slot-time";
 import { css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
@@ -17,6 +17,7 @@ import { helmanColorVars } from "../color-vars";
 
 import { addDaysToDayKey } from "../shared/schedule/model/schedule-time";
 import "../shared/day-line-chart";
+import "../shared/solar-day-gauge";
 import type { DayLineSeries } from "../shared/day-line-chart";
 import { IDLE_W, NodeDetailContentBase } from "./node-detail-base";
 import { readEnergyKWh } from "./node-detail-readings";
@@ -27,7 +28,6 @@ import type { SolarDetailParams } from "./node-detail-types";
 import "../helman-simple/simple-card-solar";
 import "./detail-headline";
 import "./flow-gauge";
-import "./help-tip";
 import { boldTemplate } from "./detail-section";
 import { renderForecastChart } from "./node-detail-forecast";
 import { historyRow, kwhText, renderShowMore, sectionNotReady, subTitle } from "./node-detail-history";
@@ -47,8 +47,6 @@ interface Slot {
 
 /** The forecast as the answers read it, for the slot in progress. */
 interface ForecastModel {
-    /** Today's elapsed slots that have a measured value, against the forecast for the same slots. */
-    comparison: { startMs: number; endMs: number; actualKwh: number; forecastKwh: number } | null;
     /** Forecast energy from now to the end of today, the slot in progress by its remaining part. */
     remainingKwh: number;
     /** When today's forecast production next ends, if it does. */
@@ -261,7 +259,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         void this._loadForecast();
     }
 
-    /** The comparison and the rest of today's forecast move at each forecast slot boundary. */
+    /** The rest of today's forecast moves at each forecast slot boundary. */
     protected *_clockBoundaries(): Iterable<number> {
         yield* this._model()?.boundaries ?? [];
     }
@@ -329,7 +327,6 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         const rated = this._ratedW(overview);
         const peak = model.todaySlots.reduce<{ start: number; wh: number } | null>((best, slot) => !best || slot.wh > best.wh ? slot : best, null);
         const soFar = readEnergyKWh(this.hass, overview.entities.today_energy);
-        const comparison = model.comparison;
         const days = model.days.slice(1).filter((day) => day.kwh !== null);
         const most = Math.max(0, ...days.map((day) => day.kwh!));
         const bias = this._forecast!.solar.biasCorrection;
@@ -347,14 +344,17 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
                 markers: peak && peak.wh > 0 ? [{ t: peak.start + SLOT_MS / 2, v: slotW(peak.wh) / 1000, color: "var(--helman-solar)" }] : [],
                 formatValue: (value) => formatPower(value * 1000).display,
             })}
+            ${bias?.todayGauge ? html`
+                <div class="section-title">${this.localize("node_detail.shared.solar_day_gauge.title")}</div>
+                <div class="tile" data-today-gauge>
+                    <helman-solar-day-gauge .gauge=${bias.todayGauge} .hass=${this.hass} .localize=${this.localize}></helman-solar-day-gauge>
+                </div>` : nothing}
             <div class="rows">
                 ${soFar !== null ? row("total", forecast("solar_total"), html`≈ ${formatKwh(soFar + model.remainingKwh)} kWh <span class="label">${fillTemplate(forecast("solar_total_parts"), {
                     so_far: formatKwh(soFar), to_come: formatKwh(model.remainingKwh) })}</span>`) : nothing}
                 ${peak && peak.wh > 0 ? row("peak", html`<span style="color: var(--helman-solar)">●</span> ${forecast("solar_peak")}`, html`${fillTemplate(forecast("at"), {
                     value: formatPower(slotW(peak.wh)).display, time: this._time(peak.start) })}${peak.start + SLOT_MS <= context.now ? html` <span class="label">${forecast("solar_passed")}</span>` : nothing}`) : nothing}
                 ${model.endsAt !== null ? row("ends", forecast("solar_ends"), `≈ ${this._time(model.endsAt)}`) : nothing}
-                ${comparison && comparison.forecastKwh > 0 ? row("versus", forecast("solar_versus"), fillTemplate(forecast(comparison.actualKwh >= comparison.forecastKwh ? "above" : "below"), {
-                    pct: Math.round(Math.abs(comparison.actualKwh / comparison.forecastKwh - 1) * 100) })) : nothing}
             </div>
             ${days.length ? html`
                 <div class="section-title">${forecast("solar_days")}</div>
@@ -438,7 +438,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
 
     // Technical details ---------------------------------------------------------
 
-    /** Today's raw forecast against the bias-corrected one, the correction factor and the bias training. */
+    /** Today's raw forecast against the bias-corrected one and the bias training. */
     protected _renderTechnical(_overview: SolarDetailPayload) {
         const solar = this._forecast?.solar;
         const corrected = this._model()?.days[0]?.kwh ?? null;
@@ -448,14 +448,8 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         return html`<div class="rows">
             ${this._row(t("solar_raw"), raw === null ? "—" : kwhText(raw), "raw")}
             ${this._row(t("solar_corrected"), corrected === null || !solar?.adjustedPoints ? "—" : kwhText(corrected), "corrected")}
-            ${this._row(t("solar_factor"), raw && corrected !== null && solar?.adjustedPoints ? `× ${(corrected / raw).toFixed(2)}` : "—", "correction")}
             ${this._row(t("bias_status"), bias ? t(bias.effectiveVariant === "adjusted" ? "bias_applied" : "bias_not_applied") : "—", "bias-status")}
             ${this._row(t("bias_days"), bias ? String(bias.explainability.usableDays) : "—", "bias-days")}
-            ${this._row(
-                html`${t("live_day_ratio")}<helman-help-tip .explanation=${t("live_day_ratio_help")}></helman-help-tip>`,
-                bias?.liveDayRatio ? this.localize("node_detail.shared.technical.live_day_ratio_value", liveDayRatioValues(bias.liveDayRatio, this._locale)) : "—",
-                "live-day-ratio",
-            )}
         </div>`;
     }
 
@@ -523,20 +517,6 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         const today = dayKey(now, timeZone);
         const isToday = (ms: number) => dayKey(ms, timeZone) === today;
 
-        // Only the elapsed slots with a measured value, against the forecast for
-        // exactly those slots: the in-progress slot and a gap are left out of both.
-        const forecastAt = new Map(effective.map((slot) => [slot.start, slot.wh]));
-        let comparison: ForecastModel["comparison"] = null;
-        for (const actual of toSlots(solar.actualHistory)) {
-            const forecast = forecastAt.get(actual.start);
-            if (forecast === undefined || !isToday(actual.start) || actual.start + SLOT_MS > now) continue;
-            if (comparison === null) comparison = { startMs: actual.start, endMs: actual.start + SLOT_MS, actualKwh: 0, forecastKwh: 0 };
-            comparison.startMs = Math.min(comparison.startMs, actual.start);
-            comparison.endMs = Math.max(comparison.endMs, actual.start + SLOT_MS);
-            comparison.actualKwh += Math.max(0, actual.wh) / 1000;
-            comparison.forecastKwh += Math.max(0, forecast) / 1000;
-        }
-
         let remainingKwh = 0;
         let endsAt: number | null = null;
         const boundaries: number[] = [];
@@ -572,7 +552,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         }
         const todayKwh = (slots: Slot[]) => slots.reduce((sum, slot) => isToday(slot.start) ? sum + Math.max(0, slot.wh) / 1000 : sum, 0);
         const rawTodayKwh = corrected ? todayKwh(toSlots(solar.points)) : byDay.get(today ?? "")?.kwh ?? 0;
-        return { comparison, remainingKwh, endsAt, days, corrected, rawTodayKwh, boundaries, todaySlots };
+        return { remainingKwh, endsAt, days, corrected, rawTodayKwh, boundaries, todaySlots };
     }
 
     // ── Readings and formatting ─────────────────────────────────────────────

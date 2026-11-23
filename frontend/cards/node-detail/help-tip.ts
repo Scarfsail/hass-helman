@@ -8,9 +8,10 @@ export class HelmanHelpTip extends LitElement {
             font-size: 12px; font-weight: 400; letter-spacing: 0; text-transform: none; line-height: 1.45; }
         button { width: 24px; height: 24px; display: grid; place-items: center; border: 0; background: none;
             color: var(--secondary-text-color); cursor: pointer; padding: 0; }
-        .mark { box-sizing: border-box; width: 16px; height: 16px; border: 1.5px solid var(--secondary-text-color); border-radius: 50%;
-            display: grid; place-items: center; color: var(--primary-text-color); font-size: 10px; font-weight: 700; }
-        button:hover .mark, button:focus-visible .mark { border-color: var(--primary-color); color: var(--primary-color); }
+        /* --help-tip-tone colours a mark that carries meaning, such as a direction arrow. */
+        .mark { box-sizing: border-box; width: 16px; height: 16px; border: 1.5px solid var(--help-tip-tone, var(--secondary-text-color)); border-radius: 50%;
+            display: grid; place-items: center; color: var(--help-tip-tone, var(--primary-text-color)); font-size: 10px; font-weight: 700; }
+        button:hover .mark, button:focus-visible .mark { border-color: var(--help-tip-tone, var(--primary-color)); color: var(--help-tip-tone, var(--primary-color)); }
         button:focus-visible { outline: none; }
         .popup.flip { inset-inline-start: auto; inset-inline-end: -6px; }
         .popup { position: absolute; z-index: 5; inset-inline-start: -6px; top: 26px; width: max-content; max-width: min(280px, calc(100vw - 32px));
@@ -18,6 +19,8 @@ export class HelmanHelpTip extends LitElement {
             color: var(--primary-text-color); box-shadow: 0 6px 20px #0006; text-align: start; white-space: normal; }
     `;
     @property() public explanation = "";
+    /** The glyph in the circle. */
+    @property() public mark = "?";
     @state() private _open = false;
     @state() private _flip = false;
     private _pinned = false;
@@ -37,6 +40,6 @@ export class HelmanHelpTip extends LitElement {
     private _click(): void { this._pinned = !this._pinned; if (this._pinned) this._show(); else this._open = false; }
     render() { return html`<button type="button" aria-label=${this.explanation} aria-describedby=${this._id}
         @mouseenter=${this._show} @focus=${this._show} @mouseleave=${() => { if (!this._pinned) this._open = false; }}
-        @click=${this._click}><span class="mark">?</span></button>
+        @click=${this._click}><span class="mark">${this.mark}</span></button>
         <span id=${this._id} class="popup ${this._flip ? "flip" : ""}" role="tooltip" ?hidden=${!this._open}>${this.explanation}</span>`; }
 }

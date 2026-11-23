@@ -12,7 +12,7 @@
 - **Prices.** Import (dark) and export (light) price per slot.
 - **Money.** What each slot cost or earned.
 - **Scheduled actions.** The lanes of the [schedule](../concepts/schedule.md), with the **Execute actions** switch. Tap a lane to [edit it](schedule-editor.md).
-- **Daily totals.** Solar, house, grid and battery energy and the money for the day: measured first, forecast beside it, striped.
+- **Daily totals.** Solar, house, grid and battery energy and the money for the day: measured first, forecast beside it, striped. On today, while the solar correction applies, a **Today's forecast** tile on the right shows the [solar day gauge](node-details.md#solar-day-gauge): today's raw and corrected forecast against production, Helman's rest of today with its likely range, and how far to trust it. On a narrow screen it goes full width below the tiles. Other days have no gauge.
 
 ![Inspector, tomorrow](../assets/images/inspector-tomorrow.png){ .shot }
 
